@@ -26,22 +26,48 @@ DATABASE_URL = (
 
 CONNECT_ARGS = {}
 
-# TiDB Cloud typically uses port 4000 and requires TLS
-_use_tidb_tls = (DB_PORT == "4000") or ("tidbcloud.com" in DB_HOST.lower())
-
-if _use_tidb_tls:
-    # On Render, add the CA as a Secret File and set TIDB_SSL_CA to that absolute path.
-    ssl_ca = os.getenv("TIDB_SSL_CA")  # e.g., /etc/ssl/certs/isrgrootx1.pem
-    if not ssl_ca or not os.path.isfile(ssl_ca):
-        raise RuntimeError(
-            "TIDB_SSL_CA not set or file not found. On Render, create a Secret File with the CA "
-            "and set TIDB_SSL_CA to its absolute path."
-        )
-    # PyMySQL expects an 'ssl' dict; passing the CA file is enough.
-    CONNECT_ARGS = {"ssl": {"ca": ssl_ca}}
-    print(f"[DB] TLS enabled with CA: {ssl_ca}")
+# Optional override (0/1/true/false). If not set, infer from port/host.
+DB_USE_TLS = os.getenv("DB_USE_TLS")
+if DB_USE_TLS is not None:
+    use_tls = DB_USE_TLS.strip().lower() in ("1", "true", "yes")
 else:
-    print("[DB] TLS not required (non-TiDB or port != 4000).")
+    use_tls = (DB_PORT == "4000") or ("tidbcloud.com" in (DB_HOST or "").lower())
+
+if use_tls:
+    # Show what's actually mounted in /etc/secrets (Render mounts Secret Files here)
+    try:
+        print("[TLS] /etc/secrets contents:", os.listdir("/etc/secrets"))
+    except Exception as _e:
+        print("[TLS] Could not list /etc/secrets:", _e)
+
+    # Candidate CA paths (env + common filenames)
+    env_ca = (os.getenv("TIDB_SSL_CA") or "").strip()
+    candidates = [p for p in [env_ca,
+                              "/etc/secrets/TIDB_SSL_CA",
+                              "/etc/secrets/isrgrootx1.pem",
+                              "/etc/secrets/ca.pem",
+                              "/etc/ssl/certs/isrgrootx1.pem",
+                              "/etc/ssl/certs/ca-certificates.crt"] if p]
+
+    ssl_ca_path = next((p for p in candidates if os.path.isfile(p)), None)
+
+    if ssl_ca_path:
+        CONNECT_ARGS = {"ssl": {"ca": ssl_ca_path}}
+        print(f"[DB] TLS enabled with CA: {ssl_ca_path}")
+    else:
+        # Fall back to system CAs; many managed DBs are signed by public roots.
+        try:
+            ctx = ssl.create_default_context()
+            CONNECT_ARGS = {"ssl": ctx}
+            print("[DB] TLS enabled with system CA bundle (no explicit CA file found).")
+        except Exception as e:
+            # Last resort: error out with helpful message
+            raise RuntimeError(
+                "TLS required but no CA file found and system bundle failed. "
+                "Set env TIDB_SSL_CA to /etc/secrets/<your-secret-file> or add a Secret File."
+            ) from e
+else:
+    print("[DB] TLS not required (DB_USE_TLS=0 or non-TiDB settings).")
 
 from sqlalchemy import create_engine
 ENGINE = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=CONNECT_ARGS)
