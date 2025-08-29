@@ -6,4 +6,4 @@ pandas
 beautifulsoup4
 openai
 python-dotenv
-EOF
+
