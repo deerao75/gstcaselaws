@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template, abort, redirect, url_for, flash, send_file, jsonify, render_template_string
 from sqlalchemy import create_engine, MetaData, Table, select, or_, func, text, and_, insert, update, delete
 from bs4 import BeautifulSoup
-import os, re, io, ssl, json
+import os, re, io, ssl, json, time, hashlib
 import pandas as pd
 from collections import defaultdict
 from datetime import date, datetime
@@ -167,6 +167,32 @@ def _openai_chat_json(messages, model=None, max_tokens=900, temperature=0.3):
             m = re.search(r"\{.*\}", raw, flags=re.S)
             return json.loads(m.group(0)) if m else {}
 
+# ======================= RUNTIME CACHES (speed-ups) =======================
+_AI_CACHE = {}     # { key: {"value": str, "exp": epoch_seconds} }
+_META_CACHE = {}   # { name: {"value": any, "exp": epoch_seconds} }
+
+def _ai_cache_get(key: str):
+    e = _AI_CACHE.get(key)
+    if not e: return None
+    if e["exp"] < time.time():
+        _AI_CACHE.pop(key, None)
+        return None
+    return e["value"]
+
+def _ai_cache_set(key: str, value: str, ttl_sec: int = 900):
+    _AI_CACHE[key] = {"value": value, "exp": time.time() + ttl_sec}
+
+def _meta_cache_get(name: str):
+    e = _META_CACHE.get(name)
+    if not e: return None
+    if e["exp"] < time.time():
+        _META_CACHE.pop(name, None)
+        return None
+    return e["value"]
+
+def _meta_cache_set(name: str, value, ttl_sec: int = 300):
+    _META_CACHE[name] = {"value": value, "exp": time.time() + ttl_sec}
+
 # ======================= HELPERS =======================
 def like_filters(q: str):
     terms = []
@@ -176,6 +202,11 @@ def like_filters(q: str):
     return or_(*terms) if terms else text("1=1")
 
 def _distinct(colname):
+    # 5-minute cache to avoid repeated DB hits for dropdowns
+    ck = f"distinct:{colname}"
+    hit = _meta_cache_get(ck)
+    if hit is not None:
+        return hit
     with ENGINE.connect() as conn:
         rows = conn.execute(
             select(getattr(Acer.c, colname)).where(
@@ -183,9 +214,16 @@ def _distinct(colname):
                 getattr(Acer.c, colname) != ""
             ).distinct().order_by(getattr(Acer.c, colname).asc())
         ).scalars().all()
-    return [r for r in rows if r not in (None, "")]
+    vals = [r for r in rows if r not in (None, "")]
+    _meta_cache_set(ck, vals, ttl_sec=300)
+    return vals
 
 def _subjects_grouped():
+    # 5-minute cache for subjects tree
+    ck = "subjects"
+    hit = _meta_cache_get(ck)
+    if hit is not None:
+        return hit
     with ENGINE.connect() as conn:
         rows = conn.execute(
             select(Acer.c.subject_matter1, Acer.c.subject_matter2)
@@ -198,7 +236,9 @@ def _subjects_grouped():
         if k:
             if v: d[k].add(v)
             else: d[k] = d[k]
-    return {k: sorted(v) for k, v in sorted(d.items(), key=lambda kv: kv[0].lower())}
+    out = {k: sorted(v) for k, v in sorted(d.items(), key=lambda kv: kv[0].lower())}
+    _meta_cache_set(ck, out, ttl_sec=300)
+    return out
 
 def _strip_all_html(html: str) -> str:
     if not html:
@@ -290,26 +330,45 @@ def _clean_summary(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text
 
-# ======================= AI EXPLANATION (existing) =======================
+# ======================= AI EXPLANATION (FASTER + CACHED) =======================
 def get_ai_explanation(prompt_text):
+    """
+    Faster, cached AI step for 'Search with AI'.
+    - 1–2 short paragraphs + final 'Keywords:' line (5–10 comma-separated).
+    - Cached for 15 minutes per (query + selected filters).
+    """
+    args = request.args
+    key_src = "|".join([
+        "ai", (prompt_text or "").strip(),
+        ",".join(sorted(args.getlist("industry"))),
+        ",".join(sorted(args.getlist("section"))),
+        ",".join(sorted(args.getlist("rule"))),
+        ",".join(sorted(args.getlist("party"))),
+        ",".join(sorted(args.getlist("s1"))),
+        ",".join(sorted(args.getlist("s2"))),
+    ])
+    cache_key = "ai_explain:" + hashlib.sha256(key_src.encode("utf-8")).hexdigest()
+    cached = _ai_cache_get(cache_key)
+    if cached is not None:
+        return {"text": cached, "cached": True}
+
     full_prompt = (
-        "You are an expert on Indian GST laws. Answer the following query comprehensively in a couple of paragraphs. "
-        "Specifically mention relevant sections, rules, notifications, or circulars. "
-        "Then, identify keywords or phrases from your answer that could be used to search for related case laws in a database. "
-        "List these keywords/phrases (e.g., 'Input Tax Credit', 'Section 18', 'Rule 36') separated by commas.\n\n"
-        f"Query: {prompt_text}"
+        "You are an expert on Indian GST laws. In 1–2 short paragraphs, answer the query. "
+        "Then, on a final line that starts with 'Keywords:', list 5–10 search keywords "
+        "(comma-separated). Keep total under ~250 words.\n\n"
+        f"Query: {(prompt_text or '').strip()}"
     )
     try:
-        return {
-            "text": _openai_chat(
-                [
-                    {"role": "system", "content": "You are a helpful assistant knowledgeable about Indian GST laws."},
-                    {"role": "user", "content": full_prompt},
-                ],
-                max_tokens=1200,
-                temperature=0.7,
-            )
-        }
+        text = _openai_chat(
+            [
+                {"role": "system", "content": "You are a helpful assistant knowledgeable about Indian GST laws."},
+                {"role": "user", "content": full_prompt},
+            ],
+            max_tokens=450,   # smaller = faster
+            temperature=0.3,
+        )
+        _ai_cache_set(cache_key, text, ttl_sec=900)  # 15 minutes
+        return {"text": text}
     except Exception as e:
         print("AI explain error:", e)
         return {"error": f"{e}"}
@@ -713,4 +772,5 @@ def contact():
     return render_template("contact.html", team=team)
 
 if __name__ == "__main__":
+    # For local dev only; Render uses gunicorn start command
     app.run(debug=True)
