@@ -7,6 +7,11 @@ from collections import defaultdict
 from datetime import date, datetime
 
 # ======================= DB CONFIG =======================
+import os, ssl
+
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
+
 DB_USER = os.getenv("TIDB_USER") or os.getenv("MYSQL_USER", "root")
 DB_PASSWORD = os.getenv("TIDB_PASSWORD") or os.getenv("MYSQL_PASSWORD", "592230")
 DB_HOST = os.getenv("TIDB_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
@@ -18,17 +23,27 @@ DATABASE_URL = (
     f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     "?charset=utf8mb4"
 )
-CONNECT_ARGS = {}
-_use_tidb_tls = (DB_PORT == "4000") or ("tidbcloud.com" in DB_HOST.lower())
-if _use_tidb_tls:
-    ssl_ca = os.getenv("TIDB_SSL_CA", "C:/Users/deepa/Downloads/isrgrootx1.pem")
-    ssl_ctx = ssl.create_default_context(cafile=ssl_ca)
-    ssl_ctx.check_hostname = True
-    ssl_ctx.verify_mode = ssl.CERT_REQUIRED
-    CONNECT_ARGS = {"ssl": ssl_ctx}
 
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
+CONNECT_ARGS = {}
+
+# TiDB Cloud typically uses port 4000 and requires TLS
+_use_tidb_tls = (DB_PORT == "4000") or ("tidbcloud.com" in DB_HOST.lower())
+
+if _use_tidb_tls:
+    # On Render, add the CA as a Secret File and set TIDB_SSL_CA to that absolute path.
+    ssl_ca = os.getenv("TIDB_SSL_CA")  # e.g., /etc/ssl/certs/isrgrootx1.pem
+    if not ssl_ca or not os.path.isfile(ssl_ca):
+        raise RuntimeError(
+            "TIDB_SSL_CA not set or file not found. On Render, create a Secret File with the CA "
+            "and set TIDB_SSL_CA to its absolute path."
+        )
+    # PyMySQL expects an 'ssl' dict; passing the CA file is enough.
+    CONNECT_ARGS = {"ssl": {"ca": ssl_ca}}
+    print(f"[DB] TLS enabled with CA: {ssl_ca}")
+else:
+    print("[DB] TLS not required (non-TiDB or port != 4000).")
+
+from sqlalchemy import create_engine
 ENGINE = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=CONNECT_ARGS)
 metadata = MetaData()
 Acer = Table(TABLE_NAME, metadata, autoload_with=ENGINE)
