@@ -1,0 +1,9 @@
+Flask
+gunicorn
+SQLAlchemy
+PyMySQL
+pandas
+beautifulsoup4
+openai
+python-dotenv
+EOF
