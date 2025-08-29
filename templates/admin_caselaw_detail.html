@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Admin — {{ table_name }}{% endblock %}
+{% block content %}
+<div class="card" style="padding:16px;">
+  <div style="display:flex; align-items:center; gap:10px;">
+    <h2 style="margin:0;">Admin – {{ table_name }}</h2>
+    <a class="btn btn-orange" href="{{ url_for('admin_new_case') }}" style="margin-left:auto;">+ Add New</a>
+  </div>
+
+  <form method="get" class="card" style="padding:10px; margin-top:10px;">
+    <div style="display:flex; gap:10px; align-items:center;">
+      <input type="text" name="q" value="{{ q or '' }}" placeholder="Search…" style="flex:1">
+      <input type="hidden" name="per_page" value="{{ per_page }}">
+      <button class="btn btn-orange" type="submit">Search</button>
+      {% if q %}<span class="pill">filtered</span>{% endif %}
+      <span class="pill">{{ total }} result{{ '' if total==1 else 's' }}</span>
+    </div>
+  </form>
+
+  <div style="overflow-x:auto; margin-top:10px;">
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Case No.</th>
+        <th>Name of Party</th>
+        <th>Date</th>
+        <th>State</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.case_law_number }}</td>
+        <td>{{ r.name_of_party }}</td>
+        <td>{{ r.date }}</td>
+        <td>{{ r.state }}</td>
+        <td><a class="btn btn-orange" href="{{ url_for('admin_edit_case', rid=r.id) }}">Edit</a></td>
+      </tr>
+    {% endfor %}
+    {% if not rows %}
+      <tr><td colspan="6" class="muted">No data</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+  </div>
+
+  {% set pages = (total // per_page) + (1 if total % per_page else 0) %}
+  {% if pages > 1 %}
+  <div style="margin-top:12px; text-align:right;">
+    {% for p in range(1, pages+1) %}
+      {% if p == page %}
+        <span class="pill">Page {{ p }}</span>
+      {% else %}
+        <a class="btn" href="?page={{p}}&per_page={{per_page}}&q={{q}}">{{p}}</a>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

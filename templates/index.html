@@ -1,0 +1,987 @@
+{% extends "base.html" %}
+{% block title %}GST Case Law Explorer — Home{% endblock %}
+
+{% block head %}
+<style>
+  /* Hero (centered) */
+  .hero { text-align:center; }
+  .hero h1{ margin:8px 0 0 0; font-size:44px; color:#111; font-weight:700; }
+  .hero .sub{ margin:4px 0 18px 0; font-size:30px; color:var(--orange); font-weight:600; }
+  .hero-wrap{ background:#fff; border-radius:14px; padding:20px; border:1px solid var(--border); color:#111;}
+
+  /* Wrapper with LIGHT GREY BG behind ALL filters + search + buttons */
+  .filters-wrap{
+    background:var(--bg-soft);
+    border:1px solid #ededed;
+    border-radius:14px;
+    padding:16px;
+    margin-top:22px;
+  }
+  .ai-search-wrap {
+    background:var(--bg-soft);
+    border:1px solid #ededed;
+    border-radius:14px;
+    padding:16px;
+    margin-top:22px;
+  }
+
+  .section-heading {
+    font-weight: bold;
+    margin-bottom: 10px;
+    font-size: 18px;
+    color: #333;
+  }
+
+  /* Inside the wrapper */
+  .filters{ position:relative; }
+  .grid-3{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .grid-2{ display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin-top:12px; }
+
+  /* Popover dropdowns (no layout shift) with borders and selected preview */
+  .dd{
+    position:relative;
+    border:1.5px solid var(--orange);
+    border-radius:12px; background:#fff;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.02), 0 2px 8px rgba(0,0,0,0.03);
+  }
+  .dd > .dd-summary{
+    padding:12px 14px; font-weight:600; color:#111; cursor:pointer;
+    display:flex; align-items:center; justify-content:space-between; user-select:none; gap:10px;
+  }
+  .dd .title{ white-space:nowrap; }
+  .dd .sel{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#333; }
+  .dd .car{ color:#888; transition:transform .15s ease; }
+  .dd.open > .dd-summary .car{ color:var(--orange); transform:rotate(180deg); }
+  .dd > .dd-body{
+    position:absolute; top:100%; left:0; width:100%; z-index:30;
+    background:#fff; border:1.5px solid var(--orange); border-radius:12px; margin-top:6px;
+    padding:12px 12px; max-height:300px; overflow:auto;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.08);
+    display:none;
+  }
+  .dd.open > .dd-body{ display:block; }
+
+  /* Search box inside dropdowns */
+  .search-in-filter{ width:100%; margin-bottom:10px; padding:10px; border-radius:10px; border:1px solid #e4e4e4; }
+
+  /* Options (no checkboxes) */
+  .opt{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:10px; padding:8px 6px; border-radius:8px; cursor:pointer;
+    border:1px solid transparent;
+  }
+  .opt .label{ color:#222; }
+  .opt:hover{ background:#fafafa; }
+  .opt.selected{ background:var(--orange-faint); border-color:var(--orange); }
+  .opt.selected .label{ font-weight:600; color:#000; }
+  .subject-group b{ display:block; margin:6px 0 2px 0; color:#111; }
+
+  /* Search line sits INSIDE the grey wrapper now */
+  .searchline{ display:flex; gap:10px; margin-top:12px; }
+  .searchline textarea{
+    flex:1; border:1.5px solid #000;
+    font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+  }
+  .btn-black{ background:#000; color:#fff; border-color:#000; }
+  .btn-black:hover{ filter:brightness(0.96); }
+  .btn.btn-orange{ background:var(--orange); color:#fff; border-color:var(--orange); }
+  .btn.btn-orange:hover{ filter:brightness(0.98); }
+
+  /* Loading overlay */
+  .loading-overlay{
+    position:fixed; inset:0; background:rgba(255,255,255,0.7);
+    display:none; align-items:center; justify-content:center; z-index:1000;
+  }
+  .spinner{
+    width:44px; height:44px; border:4px solid #ffd9bf; border-top-color:var(--orange); border-radius:50%;
+    animation:spin 0.8s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  /* Results */
+  .results{ display:grid; grid-template-columns:1fr; gap:16px; margin-top:16px;}
+  .result{
+    padding:20px; border:2px solid #e6e6e6; border-radius:14px; background:#fbfbfb;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.02);
+  }
+  .result:hover{ box-shadow: 0 12px 30px rgba(0,0,0,0.08); }
+  .kv{ display:grid; grid-template-columns:180px 1fr; gap:12px; margin:8px 0; }
+  .kv .cno{ color:var(--orange); font-weight:600; }
+  .kv .party{ color:#111; font-weight:600; }
+  .kv b{ color:#333; }
+  .prose, .prose * { text-align: justify; }
+  .hint{ color:#666; font-size:12px; }
+
+  /* Highlight for matched full phrase in results */
+  .hl{ background:var(--orange-faint); border-radius:3px; padding:0 2px; }
+
+  /* Pagination */
+  .pagi{ display:flex; gap:8px; justify-content:flex-end; margin-top:12px; align-items:center; flex-wrap:wrap; }
+  .pagi .btn{ padding:8px 10px; }
+  .pagi .pill{ padding:6px 10px; }
+
+  /* Sub-filter bar above results */
+  .refine{
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    background:#fff; border:1px solid #e6e6e6; border-radius:12px; padding:10px 12px; margin-top:12px;
+  }
+  .refine b{ margin-right:4px; }
+  .refine select{
+    padding:8px 10px; border:1px solid #ddd; border-radius:10px; background:#fff;
+    min-width:160px; font-size:14px;
+  }
+
+  /* AI / Summary Sections */
+  .ai-response {
+    margin-top: 20px;
+    padding: 20px;
+    border: 1px solid #e6e6e6;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }
+  .ai-response h3 { margin-top: 0; color: #111; font-size: 20px; }
+  .ai-response .ai-text {
+    white-space: pre-wrap;
+    font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+    font-size:15px; line-height:1.6; text-align: justify;
+  }
+  .ai-response .error { color: red; font-weight: bold; }
+
+  @media (max-width:900px){
+    .grid-3{ grid-template-columns:1fr; }
+    .grid-2{ grid-template-columns:1fr; }
+    .kv{ grid-template-columns:1fr; }
+    .refine { flex-direction: column; align-items: flex-start; }
+    .refine > * { width: 100%; margin-bottom: 8px; }
+    .refine select { min-width: auto; }
+  }
+  .btn{ cursor:pointer; }
+
+  /* AI / Summary text: justified + Aptos 15px */
+  .ai-response .ai-text {
+    white-space: pre-wrap;
+    font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+    font-size:15px;
+    line-height:1.6;
+    text-align: justify;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="hero-wrap">
+  <div class="hero">
+    <h1>India GST Case Laws</h1>
+    <div class="sub">Search Made Easy!</div>
+  </div>
+</div>
+
+<div class="loading-overlay" id="loading">
+  <div class="spinner" aria-label="Searching…"></div>
+</div>
+
+<!-- LIGHT GREY BACKGROUND WRAPPER FOR FILTERS -->
+<div class="filters-wrap">
+  <div class="section-heading">Search by topic</div>
+  <form method="get" class="filters" id="filtersForm">
+    <!-- ROW 1: Industry, Section, RULES -->
+    <div class="grid-3">
+      <!-- Industry -->
+      <div class="dd" data-dd>
+        <div class="dd-summary">
+          <span class="title">Industry</span>
+          <span class="sel muted" data-sel></span>
+          <span class="car">▾</span>
+        </div>
+        <div class="dd-body">
+          {% for val in industries %}
+          <div class="opt {% if val in selected.industry %}selected{% endif %}" data-name="industry" data-value="{{ val }}">
+            <span class="label">{{ val }}</span>
+            <input type="checkbox" name="industry" value="{{ val }}" {% if val in selected.industry %}checked{% endif %} hidden>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <!-- Section -->
+      <div class="dd" data-dd>
+        <div class="dd-summary">
+          <span class="title">Section</span>
+          <span class="sel muted" data-sel></span>
+          <span class="car">▾</span>
+        </div>
+        <div class="dd-body">
+          {% for val in sections %}
+          <div class="opt {% if val in selected.section %}selected{% endif %}" data-name="section" data-value="{{ val }}">
+            <span class="label">{{ val }}</span>
+            <input type="checkbox" name="section" value="{{ val }}" {% if val in selected.section %}checked{% endif %} hidden>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <!-- Rules -->
+      <div class="dd" data-dd>
+        <div class="dd-summary">
+          <span class="title">Rules</span>
+          <span class="sel muted" data-sel></span>
+          <span class="car">▾</span>
+        </div>
+        <div class="dd-body">
+          {% for val in rules %}
+          <div class="opt {% if val in selected.rule %}selected{% endif %}" data-name="rule" data-value="{{ val }}">
+            <span class="label">{{ val }}</span>
+            <input type="checkbox" name="rule" value="{{ val }}" {% if val in selected.rule %}checked{% endif %} hidden>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 2: SUBJECT, PARTY -->
+    <div class="grid-2" style="margin-top:12px;">
+      <!-- Subject -->
+      <div class="dd" data-dd>
+        <div class="dd-summary">
+          <span class="title">Subject</span>
+          <span class="sel muted" data-sel></span>
+          <span class="car">▾</span>
+        </div>
+        <div class="dd-body" id="subjectOptions">
+          <input class="search-in-filter" type="text" placeholder="Search subjects…" oninput="filterSubject(this.value)">
+          {% for s1, s2list in subjects.items() %}
+            <div class="subject-group" data-s1="{{ s1 | lower }}">
+              <div class="opt {% if s1 in selected.s1 %}selected{% endif %}" data-name="s1" data-value="{{ s1 }}">
+                <span class="label"><b>{{ s1 }}</b></span>
+                <input type="checkbox" name="s1" value="{{ s1 }}" {% if s1 in selected.s1 %}checked{% endif %} hidden>
+              </div>
+              {% for s2 in s2list %}
+              <div class="opt {% if s2 in selected.s2 %}selected{% endif %}" data-name="s2" data-value="{{ s2 }}" data-s2="{{ s2 | lower }}">
+                <span class="label" style="margin-left:14px">{{ s2 }}</span>
+                <input type="checkbox" name="s2" value="{{ s2 }}" {% if s2 in selected.s2 %}checked{% endif %} hidden>
+              </div>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Name of the Party -->
+      <div class="dd" data-dd>
+        <div class="dd-summary">
+          <span class="title">Name of the Party</span>
+          <span class="sel muted" data-sel></span>
+          <span class="car">▾</span>
+        </div>
+        <div class="dd-body" id="partyOptions">
+          <input class="search-in-filter" type="text" placeholder="Search parties…" oninput="filterParty(this.value)">
+          {% for val in parties %}
+          <div class="opt {% if val in selected.party %}selected{% endif %}" data-name="party" data-value="{{ val }}" data-party="{{ val | lower }}">
+            <span class="label">{{ val }}</span>
+            <input type="checkbox" name="party" value="{{ val }}" {% if val in selected.party %}checked{% endif %} hidden>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Buttons for Filters (inside the wrapper) -->
+    <div class="searchline">
+      <button class="btn btn-orange" type="submit" id="filterSearchBtn">Search</button>
+      <a class="btn btn-black" href="{{ url_for('home') }}">Reset</a>
+      <!-- NEW: Summarize button -->
+      <button class="btn btn-orange" type="button" id="summarizeBtn" title="Summarize current results">AI summary of the results</button>
+    </div>
+  </form>
+
+  <div class="hint" style="margin-top:6px;">
+    Tip: Select items from dropdown filters by clicking the item; click again to unselect. Then press <b>Search</b>.
+    Selection of items across multiple filters will render results only if the data is mapped to all those filters.
+    Selection of items from one filter at a time yields the best result.
+  </div>
+</div>
+
+<!-- LIGHT GREY BACKGROUND WRAPPER FOR AI SEARCH -->
+<div class="ai-search-wrap">
+  <div class="section-heading">Search with AI</div>
+  <form method="get" id="aiSearchForm">
+    <div class="searchline">
+      <input type="hidden" name="ai_search" value="true">
+      <textarea name="ai_q" rows="2" placeholder="Ask a question about GST...">{{ ai_q }}</textarea>
+      <button class="btn btn-orange" type="submit" id="aiSearchBtn">Search</button>
+      <a class="btn btn-black" href="{{ url_for('home') }}">Reset</a>
+    </div>
+  </form>
+</div>
+
+{% set has_search = (q or selected.industry or selected.section or selected.rule or selected.party or selected.s1 or selected.s2 or ai_q) %}
+{% if has_search %}
+  {% if ai_q %}
+  <div class="ai-response" id="aiResponse">
+    <h3>AI Explanation:</h3>
+    <div id="aiMeta" data-aiq="{{ ai_q|e }}"></div>
+    <div id="aiContent">
+      {% if ai_response %}
+        {% if ai_response.error %}
+          <p class="error">{{ ai_response.error }}</p>
+        {% else %}
+          <div class="ai-text" id="aiLLM">{{ ai_response.text }}</div>
+        {% endif %}
+      {% else %}
+        <div class="ai-text">Generating explanation...</div>
+      {% endif %}
+      <div class="ai-text" id="aiSynthesis"></div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- NEW: Summary box placeholder (shown when you click Summarize) -->
+  <div class="ai-response" id="summaryBox" style="display:none;">
+    <h3>Summary of key cases</h3>
+    <div class="ai-text" id="summaryText"></div>
+  </div>
+
+  {% if results %}
+  <div style="margin-top:10px;" class="muted" id="totalCount" data-total="{{ total }}">{{ total }} result{{ '' if total==1 else 's' }}</div>
+
+  <!-- SUB-FILTERS BAR (Type of Court / State / Year) -->
+  <div class="refine" id="refineBar">
+    <b>Refine Results:</b>
+    <select id="refCourt">
+      <option value="">All Courts</option>
+    </select>
+    <select id="refState">
+      <option value="">All States</option>
+    </select>
+    <select id="refYear">
+      <option value="">All Years</option>
+    </select>
+    <button class="btn btn-orange" id="resetRefineBtn">Reset Refine</button>
+  </div>
+
+  <!-- data-pages & data-cur assist client in aggregating full result-set -->
+  <div class="results" id="results"
+       data-q="{{ q|e }}"
+       data-pages="{{ pages }}"
+       data-cur="{{ page }}">
+    {% for r in results %}
+      {# ---- Try to read court/state directly (keys can vary) ---- #}
+      {% set _court = '' %}
+      {% for k,v in r.items() %}
+        {% set lk = (k|string).strip().lower() %}
+        {% if not _court and lk in ['type_of_court','type of court','court','court_name','court name','courttype','type-of-court'] %}
+          {% set _court = (v|string).strip() %}
+        {% endif %}
+      {% endfor %}
+      {% set _state = '' %}
+      {% for k,v in r.items() %}
+        {% set lk = (k|string).strip().lower() %}
+        {% if not _state and lk in ['state','state/ut','state_ut','state name','state_name','state-ut'] %}
+          {% set _state = (v|string).strip() %}
+        {% endif %}
+      {% endfor %}
+
+      {# ---- Existing fields ---- #}
+      {% set _year  = r.get('year') or ((r.get('date') or r.get('Date') or r.get('date_of_decision') or r.get('Date of Decision') or '') | string)[:4] %}
+      {% set _case  = r.get('case_law_number') or r.get('Case No.') or r.get('case_no') or '' %}
+      {% set _party = r.get('name_of_party') or r.get('Party') or r.get('party') or '' %}
+      {% set _date  = r.get('date') or r.get('Date') or r.get('date_of_decision') or r.get('Date of Decision') or '' %}
+      {% set _hn    = r.get('summary_head_note') or r.get('head_notes') or r.get('Head Notes') or r.get('summary_full') or '' %}
+      {% set _rid   = r.get('id') or r.get('ID') or r.get('rid') %}
+
+      {# ---- Pull possible Sections / Rules / Notifications / Circulars from various column names ---- #}
+      {% set _sections_str = (r.get('sections') or r.get('Sections') or r.get('section') or r.get('Section') or r.get('section(s)') or '') | string %}
+      {% set _rules_str    = (r.get('rules') or r.get('Rules') or r.get('rule') or r.get('Rule') or '') | string %}
+      {% set _notif_str    = (r.get('notification') or r.get('Notification') or r.get('notifications') or r.get('Notifications') or r.get('notification_no') or r.get('Notification No.') or r.get('notification_number') or '') | string %}
+      {% set _circ_str     = (r.get('circular') or r.get('Circular') or r.get('circulars') or r.get('Circulars') or r.get('circular_no') or r.get('Circular No.') or '') | string %}
+
+      {# ======================================================================
+         FALLBACKS from Case No. to guess court/state (only for refine, not search)
+      ====================================================================== #}
+      {% if (not _court) or (not _state) %}
+        {% set _case_up = (_case|string).upper().strip() %}
+        {% set _seg = (_case_up.rsplit('-', 1)[-1] if '-' in _case_up else _case_up) | trim %}
+        {% set _prefix = _seg|replace(' ','')|replace('(','')|replace(')','') %}
+        {% if _prefix.startswith('AAAR') %}
+          {% set _court = 'AAAR' %}{% set _code = _prefix[4:] %}
+        {% elif _prefix.startswith('AAR') %}
+          {% set _court = 'AAR' %}{% set _code = _prefix[3:] %}
+        {% elif _prefix.startswith('HC') %}
+          {% set _court = 'High Court' %}{% set _code = _prefix[2:] %}
+        {% elif _prefix.startswith('SC') %}
+          {% set _court = 'Supreme Court' %}{% set _code = _prefix[2:] %}
+        {% else %}
+          {% set _code = '' %}
+        {% endif %}
+        {% if '(' in _seg and ')' in _seg %}
+          {% set _code = _seg.rsplit('(',1)[-1].split(')')[0]|trim %}
+        {% endif %}
+        {% if not _state and _code %}
+          {% if   _code in ['TL','TS','TEL'] %}{% set _state = 'Telangana' %}
+          {% elif _code in ['KA','KAR','KTK'] %}{% set _state = 'Karnataka' %}
+          {% elif _code in ['TN','TND','TAM'] %}{% set _state = 'Tamil Nadu' %}
+          {% elif _code in ['AP','AND'] %}{% set _state = 'Andhra Pradesh' %}
+          {% elif _code in ['MH','MAH'] %}{% set _state = 'Maharashtra' %}
+          {% elif _code in ['GJ','GUJ'] %}{% set _state = 'Gujarat' %}
+          {% elif _code in ['RJ','RAJ'] %}{% set _state = 'Rajasthan' %}
+          {% elif _code in ['UP'] %}{% set _state = 'Uttar Pradesh' %}
+          {% elif _code in ['UK','UTK','UTR'] %}{% set _state = 'Uttarakhand' %}
+          {% elif _code in ['WB','BEN','WBN'] %}{% set _state = 'West Bengal' %}
+          {% elif _code in ['KL','KER'] %}{% set _state = 'Kerala' %}
+          {% elif _code in ['HR','HAR'] %}{% set _state = 'Haryana' %}
+          {% elif _code in ['PB','PUN','PN'] %}{% set _state = 'Punjab' %}
+          {% elif _code in ['DL','DEL','NCT'] %}{% set _state = 'Delhi' %}
+          {% elif _code in ['MP','MPR'] %}{% set _state = 'Madhya Pradesh' %}
+          {% elif _code in ['CG','CT','CHH'] %}{% set _state = 'Chhattisgarh' %}
+          {% elif _code in ['BR','BIH'] %}{% set _state = 'Bihar' %}
+          {% elif _code in ['OR','OD','ODI','ODS'] %}{% set _state = 'Odisha' %}
+          {% elif _code in ['AS','ASM'] %}{% set _state = 'Assam' %}
+          {% elif _code in ['HP','HIM'] %}{% set _state = 'Himachal Pradesh' %}
+          {% elif _code in ['JK','J&K'] %}{% set _state = 'Jammu & Kashmir' %}
+          {% elif _code in ['CH','CHD'] %}{% set _state = 'Chandigarh' %}
+          {% elif _code in ['GA','GOA'] %}{% set _state = 'Goa' %}
+          {% elif _code in ['JH','JHAR'] %}{% set _state = 'Jharkhand' %}
+          {% elif _code in ['TR','TRI'] %}{% set _state = 'Tripura' %}
+          {% elif _code in ['PY','POND','PDY'] %}{% set _state = 'Puducherry' %}
+          {% elif _code in ['MN','MAN'] %}{% set _state = 'Manipur' %}
+          {% elif _code in ['ML','MEG'] %}{% set _state = 'Meghalaya' %}
+          {% elif _code in ['MZ','MIZ'] %}{% set _state = 'Mizoram' %}
+          {% elif _code in ['NL','NAG'] %}{% set _state = 'Nagaland' %}
+          {% elif _code in ['AR','ARP'] %}{% set _state = 'Arunachal Pradesh' %}
+          {% elif _code in ['SK','SIK'] %}{% set _state = 'Sikkim' %}
+          {% elif _code in ['AN','ANI'] %}{% set _state = 'Andaman & Nicobar Islands' %}
+          {% elif _code in ['DN','DD','DNHDD'] %}{% set _state = 'Dadra & Nagar Haveli and Daman & Diu' %}
+          {% elif _code in ['LD','LAK'] %}{% set _state = 'Lakshadweep' %}
+          {% else %}{% set _state = _code %}{% endif %}
+        {% endif %}
+      {% endif %}
+      {% set _c_up = (_court|string).upper() %}
+      {% if _c_up in ['SC','SUPREME COURT','SUPREME COURT OF INDIA'] %}
+        {% set _court = 'Supreme Court' %}
+      {% elif _c_up in ['HC','HIGH COURT'] %}
+        {% set _court = 'High Court' %}
+      {% elif _c_up in ['AAR'] %}
+        {% set _court = 'AAR' %}
+      {% elif _c_up in ['AAAR'] %}
+        {% set _court = 'AAAR' %}
+      {% endif %}
+
+      <div class="result hl-scope"
+           data-id="{{ _rid }}"
+           data-court="{{ (_court | string | trim) }}"
+           data-state="{{ (_state | string | trim) }}"
+           data-year="{{ (_year  | string | trim) }}"
+           data-sections="{{ _sections_str }}"
+           data-rules="{{ _rules_str }}"
+           data-notifications="{{ _notif_str }}"
+           data-circulars="{{ _circ_str }}">
+        <div class="kv"><b>Case No.</b><div class="hl-field hl-case cno">{{ _case }}</div></div>
+        <div class="kv"><b>Name of Party</b><div class="hl-field hl-party party">{{ _party }}</div></div>
+        <div class="kv"><b>Date</b><div class="hl-field hl-date">{{ _date }}</div></div>
+        <div class="kv"><b>Type of Court</b><div class="hl-field hl-court">{{ _court }}</div></div>
+        <div class="kv"><b>State</b><div class="hl-field hl-state">{{ _state }}</div></div>
+
+        {% if _sections_str %}
+        <div class="kv"><b>Sections</b><div class="hl-field hl-sections">{{ _sections_str }}</div></div>
+        {% endif %}
+        {% if _rules_str %}
+        <div class="kv"><b>Rules</b><div class="hl-field hl-rules">{{ _rules_str }}</div></div>
+        {% endif %}
+        {% if _notif_str %}
+        <div class="kv"><b>Notifications</b><div class="hl-field hl-notif">{{ _notif_str }}</div></div>
+        {% endif %}
+        {% if _circ_str %}
+        <div class="kv"><b>Circulars</b><div class="hl-field hl-circ">{{ _circ_str }}</div></div>
+        {% endif %}
+
+        <div class="kv"><b>Head Notes</b>
+          <div class="prose hl-field hl-headnotes">{{ _hn|safe }}</div>
+        </div>
+        <div style="text-align:right; margin-top:8px;">
+          <a class="btn btn-orange" href="{{ url_for('public_case_detail', rid=_rid,
+                     industry=request.args.getlist('industry'),
+                     section=request.args.getlist('section'),
+                     rule=request.args.getlist('rule'),
+                     party=request.args.getlist('party'),
+                     s1=request.args.getlist('s1'),
+                     s2=request.args.getlist('s2'),
+                     q=request.args.get('q'),
+                     page=page) }}">
+             More Details
+          </a>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% if pages > 1 %}
+    <div class="pagi" id="serverPagi">
+      {% if prev_url %}
+        <a class="btn" href="{{ prev_url }}">Previous</a>
+      {% else %}
+        <span class="pill">Previous</span>
+      {% endif %}
+      {% for item in page_urls %}
+        {% if item.n == page %}
+          <span class="pill">Page {{ item.n }}</span>
+        {% else %}
+          <a class="btn" href="{{ item.url }}">{{ item.n }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if next_url %}
+        <a class="btn" href="{{ next_url }}">Next</a>
+      {% else %}
+        <span class="pill">Next</span>
+      {% endif %}
+    </div>
+  {% endif %}
+  {% endif %}
+{% else %}
+  <div class="card" style="padding:14px; margin-top:14px;">
+    Use the filters or the AI search to find information.
+  </div>
+{% endif %}
+
+<script>
+  // --- Popover dropdown behavior ---
+  document.querySelectorAll('[data-dd]').forEach(function(dd){
+    const summary = dd.querySelector('.dd-summary');
+    summary.addEventListener('click', function(){
+      const isOpen = dd.classList.contains('open');
+      document.querySelectorAll('[data-dd].open').forEach(function(other){
+        if (other !== dd) other.classList.remove('open');
+      });
+      dd.classList.toggle('open', !isOpen);
+    });
+  });
+  document.addEventListener('click', function(e){
+    const anyDD = e.target.closest('[data-dd]');
+    if (!anyDD){
+      document.querySelectorAll('[data-dd].open').forEach(function(dd){ dd.classList.remove('open'); });
+    }
+  });
+
+  // --- Option selection ---
+  function updateSummary(dd){
+    const selSpan = dd.querySelector('[data-sel]');
+    if (!selSpan) return;
+    const labels = Array.from(dd.querySelectorAll('input[type="checkbox"]:checked')).map(function(cb){
+      const lab = cb.closest('.opt')?.querySelector('.label');
+      return lab ? lab.textContent.trim() : '';
+    }).filter(Boolean);
+    if (labels.length === 0){ selSpan.textContent = ''; return; }
+    const preview = labels.slice(0,3).join(', ') + (labels.length>3 ? ` +${labels.length-3}` : '');
+    selSpan.textContent = preview;
+  }
+  document.querySelectorAll('.opt').forEach(function(opt){
+    opt.addEventListener('click', function(){
+      const input = opt.querySelector('input[type="checkbox"]');
+      input.checked = !input.checked;
+      opt.classList.toggle('selected', input.checked);
+      updateSummary(opt.closest('[data-dd]'));
+    });
+  });
+  document.querySelectorAll('[data-dd]').forEach(updateSummary);
+
+  // --- Subject & Party filter quick-search ---
+  function filterSubject(q){
+    q = (q||'').toLowerCase().trim();
+    const groups = document.querySelectorAll('#subjectOptions .subject-group');
+    groups.forEach(function(group){
+      const s2Els = group.querySelectorAll('[data-s2]');
+      let anyS2Visible = false;
+      if (q === '') {
+        s2Els.forEach(function(el){ el.style.display = ''; });
+        group.style.display = '';
+        return;
+      }
+      s2Els.forEach(function(el){
+        const s2 = (el.getAttribute('data-s2') || '');
+        const match = s2.indexOf(q) !== -1;
+        el.style.display = match ? '' : 'none';
+        if (match) anyS2Visible = true;
+      });
+      group.style.display = anyS2Visible ? '' : 'none';
+    });
+  }
+  function filterParty(q){
+    q = (q||'').toLowerCase().trim();
+    document.querySelectorAll('#partyOptions [data-party]').forEach(function(el){
+      const val = el.getAttribute('data-party') || '';
+      el.style.display = val.indexOf(q) !== -1 ? '' : 'none';
+    });
+  }
+
+  // --- Loading overlay on search submit ---
+  const filterForm = document.getElementById('filtersForm');
+  const aiForm = document.getElementById('aiSearchForm');
+  const loading = document.getElementById('loading');
+  const filterSearchBtn = document.getElementById('filterSearchBtn');
+  const aiSearchBtn = document.getElementById('aiSearchBtn');
+
+  if (filterForm) {
+    filterForm.addEventListener('submit', function(){
+      if (loading) loading.style.display = 'flex';
+      if (filterSearchBtn) filterSearchBtn.disabled = true;
+    });
+  }
+  if (aiForm) {
+     aiForm.addEventListener('submit', function(){
+      if (loading) loading.style.display = 'flex';
+      if (aiSearchBtn) aiSearchBtn.disabled = true;
+    });
+  }
+
+  // ===== Helpers =====
+  function setCountLabel(n){
+    const lbl = document.getElementById('totalCount');
+    if (!lbl) return;
+    lbl.dataset.total = String(n);
+    lbl.textContent = n + ' result' + (n === 1 ? '' : 's');
+  }
+  function highlightPhraseIn(node, phrase){
+    if (!phrase) return;
+    const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(' + esc + ')', 'gi');
+    function walk(n){
+      if (n.nodeType === 3){
+        const txt = n.nodeValue;
+        if (!txt.trim()) return;
+        const replaced = txt.replace(re, '<span class="hl">$1</span>');
+        if (replaced !== txt){
+          const span = document.createElement('span');
+          span.innerHTML = replaced;
+          n.parentNode.replaceChild(span, n);
+        }
+        return;
+      }
+      Array.from(n.childNodes).forEach(walk);
+    }
+    ['.hl-case','.hl-party','.hl-date','.hl-court','.hl-state','.hl-headnotes',
+     '.hl-sections','.hl-rules','.hl-notif','.hl-circ'].forEach(function(sel){
+      node.querySelectorAll(sel).forEach(function(scope){
+        Array.from(scope.childNodes).forEach(walk);
+      });
+    });
+  }
+
+  // ======= Ensure AI search shows DB case laws; then refine/highlight/paginate; then synthesize AI paragraph =======
+  (async function(){
+    // If AI query present but no result cards rendered by server, fetch DB results using q=<ai_q>
+    async function ensureResultsPresent(){
+      const aiMeta = document.getElementById('aiMeta');
+      const aiQuery = (aiMeta?.dataset.aiq || '').trim();
+      const haveCards = !!document.querySelector('#results .result');
+      if (!aiQuery || haveCards) return;
+
+      if (loading) loading.style.display = 'flex';
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('ai_search');
+        url.searchParams.set('q', aiQuery);
+        url.searchParams.delete('page');
+
+        const html = await fetch(url.toString()).then(r=>r.text());
+        const doc = new DOMParser().parseFromString(html,'text/html');
+
+        const fetchedTotal  = doc.querySelector('#totalCount');
+        const fetchedRefine = doc.querySelector('#refineBar');
+        const fetchedResults= doc.querySelector('#results');
+        const fetchedPagi   = doc.querySelector('#serverPagi');
+
+        document.getElementById('totalCount')?.remove();
+        document.getElementById('refineBar')?.remove();
+        document.getElementById('results')?.remove();
+        document.getElementById('serverPagi')?.remove();
+
+        const anchor = document.getElementById('aiResponse') || document.querySelector('.ai-search-wrap') || document.querySelector('.filters-wrap');
+        if (fetchedTotal)  anchor.insertAdjacentElement('afterend', fetchedTotal);
+        if (fetchedRefine) (document.getElementById('totalCount') || anchor).insertAdjacentElement('afterend', fetchedRefine);
+        if (fetchedResults)(document.getElementById('refineBar') || document.getElementById('totalCount') || anchor).insertAdjacentElement('afterend', fetchedResults);
+        if (fetchedPagi && fetchedResults) fetchedResults.insertAdjacentElement('afterend', fetchedPagi);
+      } catch(e){
+        console.error('AI->DB search fallback failed', e);
+      } finally {
+        if (loading) loading.style.display = 'none';
+      }
+    }
+
+    await ensureResultsPresent();
+
+    const resultsEl = document.getElementById('results');
+    if (!resultsEl) return;
+
+    const qPhrase = (resultsEl.getAttribute('data-q') || '').trim();
+    const totalPages = parseInt(resultsEl.getAttribute('data-pages') || '1', 10) || 1;
+    const curPage = parseInt(resultsEl.getAttribute('data-cur') || '1', 10) || 1;
+
+    // Start with cards from the current page
+    let allCards = Array.from(resultsEl.querySelectorAll('.result')).map(n => n.cloneNode(true));
+
+    // Fetch remaining pages and merge (so refine/search is across entire server result)
+    if (totalPages > 1){
+      if (loading) loading.style.display = 'flex';
+      const base = new URL(window.location.href);
+      const promises = [];
+      for (let i=1; i<=totalPages; i++){
+        if (i === curPage) continue;
+        const u = new URL(base.toString());
+        u.searchParams.set('page', String(i));
+        promises.push(fetch(u.toString()).then(r=>r.text()).then(html=>{
+          const doc = new DOMParser().parseFromString(html,'text/html');
+          const nodes = doc.querySelectorAll('#results .result');
+          return Array.from(nodes).map(n => n.cloneNode(true));
+        }).catch(()=>[]));
+      }
+      const chunks = await Promise.all(promises);
+      if (loading) loading.style.display = 'none';
+      chunks.forEach(arr => { allCards = allCards.concat(arr); });
+    }
+
+    // Deduplicate by DB id if present
+    const seen = new Set();
+    allCards = allCards.filter(card=>{
+      const id = card.getAttribute('data-id') || '';
+      if (!id) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+    // Enforce FULL-PHRASE filter ONLY within allowed fields
+    function cardMatchesPhrase(card, phrase){
+      if (!phrase) return true;
+      const p = phrase.toLowerCase();
+      const selectors = ['.hl-case','.hl-party','.hl-date','.hl-court','.hl-state','.hl-headnotes',
+                         '.hl-sections','.hl-rules','.hl-notif','.hl-circ'];
+      for (const sel of selectors){
+        const el = card.querySelector(sel);
+        if (!el) continue;
+        const txt = (el.textContent || '').toLowerCase();
+        if (txt.indexOf(p) !== -1) return true;
+      }
+      return false;
+    }
+
+    // BASELINE = all cards from server, then narrowed by the phrase requirement
+    let baseline = allCards;
+    if (qPhrase){
+      baseline = baseline.filter(card => cardMatchesPhrase(card, qPhrase));
+    }
+
+    // Build refine dropdowns from FULL (already phrase-filtered) baseline
+    const courtSel = document.getElementById('refCourt');
+    const stateSel = document.getElementById('refState');
+    const yearSel  = document.getElementById('refYear');
+    const resetBtn = document.getElementById('resetRefineBtn');
+
+    function uniqFrom(attr){
+      const s = new Set();
+      baseline.forEach(card => {
+        const v = (card.getAttribute(attr) || '').trim();
+        if (v) s.add(v);
+      });
+      return Array.from(s);
+    }
+    function fillSelect(sel, values, sortNum = false){
+      if (!sel) return;
+      while (sel.options.length > 1) sel.remove(1);
+      const arr = sortNum ? values.sort((a,b)=>parseInt(b)-parseInt(a)) : values.sort();
+      arr.forEach(v => sel.add(new Option(v, v)));
+    }
+
+    /* Restore population of All Courts / All States / All Years */
+    fillSelect(courtSel, uniqFrom('data-court'));
+    fillSelect(stateSel, uniqFrom('data-state'));
+    fillSelect(yearSel,  uniqFrom('data-year'), true);
+
+    // Working set after refine
+    let working = baseline.slice();
+
+    // Client pagination: ALWAYS 10 per page
+    const PER_PAGE = 10;
+    let clientPage = 1;
+
+    // Replace server pagination with client one
+    const serverPagi = document.getElementById('serverPagi');
+    const clientPagi = document.createElement('div');
+    clientPagi.className = 'pagi';
+
+    function renderPagi(){
+      const total = Math.ceil(working.length / PER_PAGE) || 1;
+      clientPagi.innerHTML = '';
+      function addSpan(text){ const s=document.createElement('span'); s.className='pill'; s.textContent=text; clientPagi.appendChild(s); }
+      function addBtn(text, page){
+        const a=document.createElement('a'); a.className='btn'; a.href='#'; a.textContent=text;
+        a.addEventListener('click', function(e){ e.preventDefault(); clientPage = page; renderPage(); });
+        clientPagi.appendChild(a);
+      }
+      if (clientPage > 1) addBtn('Previous', clientPage-1); else addSpan('Previous');
+      const totalToShow = Math.min(10, total);
+      let start = Math.max(1, clientPage - Math.floor(totalToShow/2));
+      let end = Math.min(total, start + totalToShow - 1);
+      start = Math.max(1, end - totalToShow + 1);
+      for (let i=start; i<=end; i++){
+        if (i === clientPage) addSpan('Page ' + i);
+        else addBtn(String(i), i);
+      }
+      if (clientPage < total) addBtn('Next', clientPage+1); else addSpan('Next');
+    }
+
+    function renderPage(){
+      resultsEl.innerHTML = '';
+      const start = (clientPage-1) * PER_PAGE;
+      const end = start + PER_PAGE;
+      const slice = working.slice(start, end);
+      slice.forEach(card => resultsEl.appendChild(card.cloneNode(true)));
+      if (qPhrase) highlightPhraseIn(resultsEl, qPhrase);
+      setCountLabel(working.length);
+      if (serverPagi) serverPagi.style.display = 'none';
+      renderPagi();
+      if (!clientPagi.parentNode) resultsEl.insertAdjacentElement('afterend', clientPagi);
+      // After rendering, update the AI synthesis so it reflects the current (refined) working set
+      synthesizeFrom(working);
+    }
+
+    function applyRefine(){
+      const c = (courtSel?.value || '').trim();
+      const s = (stateSel?.value || '').trim();
+      const y = (yearSel ?.value || '').trim();
+      working = baseline.filter(card=>{
+        const cc = (card.getAttribute('data-court') || '').trim();
+        const ss = (card.getAttribute('data-state') || '').trim();
+        const yy = (card.getAttribute('data-year')  || '').trim();
+        return (!c || cc===c) && (!s || ss===s) && (!y || yy===y);
+      });
+      clientPage = 1;
+      renderPage();
+    }
+
+    if (courtSel) courtSel.addEventListener('change', applyRefine);
+    if (stateSel) stateSel.addEventListener('change', applyRefine);
+    if (yearSel ) yearSel .addEventListener('change', applyRefine);
+    if (resetBtn){
+      resetBtn.addEventListener('click', function(e){
+        e.preventDefault();
+        if (courtSel) courtSel.selectedIndex = 0;
+        if (stateSel) stateSel.selectedIndex = 0;
+        if (yearSel ) yearSel.selectedIndex  = 0;
+        working = baseline.slice();
+        clientPage = 1;
+        renderPage();
+        fillSelect(courtSel, uniqFrom('data-court'));
+        fillSelect(stateSel, uniqFrom('data-state'));
+        fillSelect(yearSel,  uniqFrom('data-year'), true);
+      });
+    }
+
+    // ===== AI synthesis: include Sections / Rules / Notifications / Circulars =====
+    function splitTokens(s){
+      if (!s) return [];
+      return s.split(/[,;/|]+/).map(x=>x.trim()).filter(Boolean);
+    }
+    function uniq(arr){
+      const s = new Set();
+      const out = [];
+      arr.forEach(v => { const k=v.toLowerCase(); if (!s.has(k)){ s.add(k); out.push(v); } });
+      return out;
+    }
+    function synthesizeFrom(cards){
+      const aiS = document.getElementById('aiSynthesis');
+      if (!aiS) return;
+      const aiMeta = document.getElementById('aiMeta');
+      const aiQuery = (aiMeta?.dataset.aiq || '').trim();
+
+      const sections = [];
+      const rules = [];
+      const notifs = [];
+      const circs = [];
+      const courts = [];
+      const states = [];
+      const years = [];
+
+      cards.forEach(card=>{
+        splitTokens(card.getAttribute('data-sections')||'').forEach(t=>sections.push(t));
+        splitTokens(card.getAttribute('data-rules')||'').forEach(t=>rules.push(t));
+        splitTokens(card.getAttribute('data-notifications')||'').forEach(t=>notifs.push(t));
+        splitTokens(card.getAttribute('data-circulars')||'').forEach(t=>circs.push(t));
+        const c=(card.getAttribute('data-court')||'').trim(); if(c) courts.push(c);
+        const s=(card.getAttribute('data-state')||'').trim(); if(s) states.push(s);
+        const y=(card.getAttribute('data-year') ||'').trim(); if(y) years.push(y);
+      });
+
+      const S = uniq(sections).slice(0,10).join(', ');
+      const R = uniq(rules).slice(0,10).join(', ');
+      const N = uniq(notifs).slice(0,8).join(', ');
+      const C = uniq(circs).slice(0,8).join(', ');
+      const Ct= uniq(courts).slice(0,6).join(', ');
+      const St= uniq(states).slice(0,8).join(', ');
+      const Y = uniq(years).slice(0,8).join(', ');
+
+      const parts = [];
+      if (aiQuery) parts.push(`Query focus: “${aiQuery}”.`);
+      if (S) parts.push(`Sections: ${S}.`);
+      if (R) parts.push(`Rules: ${R}.`);
+      if (N) parts.push(`Notifications: ${N}.`);
+      if (C) parts.push(`Circulars: ${C}.`);
+      if (Ct) parts.push(`Courts seen: ${Ct}.`);
+      if (St) parts.push(`States seen: ${St}.`);
+      if (Y)  parts.push(`Years covered: ${Y}.`);
+
+      aiS.textContent = parts.join(' ');
+    }
+
+    // First paint
+    working = baseline.slice();
+    renderPage();
+  })();
+
+  // ===== NEW: Summarize Results (calls /summarize_results) =====
+  const summarizeBtn = document.getElementById('summarizeBtn');
+  if (summarizeBtn) {
+    summarizeBtn.addEventListener('click', async function(){
+      try {
+        summarizeBtn.disabled = true;
+        const loading = document.getElementById('loading');
+        if (loading) loading.style.display = 'flex';
+
+        // Use current query string so summary matches the shown results (filters/AI)
+        const url = new URL(window.location.origin + "/summarize_results" + window.location.search);
+        const res = await fetch(url.toString(), { method: 'GET' });
+        const data = await res.json();
+
+        const box  = document.getElementById('summaryBox');
+        const text = document.getElementById('summaryText');
+        if (!box || !text) return;
+
+        if (data.ok) {
+          text.textContent = data.summary || '';
+          box.style.display = '';
+        } else {
+          text.textContent = data.message || 'No case law results.';
+          box.style.display = '';
+        }
+
+        // Keep the summary above results
+        const anchor = document.getElementById('refineBar') || document.getElementById('totalCount') || document.querySelector('.results') || document.querySelector('.ai-search-wrap');
+        if (anchor && box.previousElementSibling !== anchor) {
+          anchor.insertAdjacentElement('beforebegin', box);
+        }
+      } catch (e) {
+        console.error('Summarize failed', e);
+        const box  = document.getElementById('summaryBox');
+        const text = document.getElementById('summaryText');
+        if (box && text) {
+          text.textContent = 'Unexpected error generating summary.';
+          box.style.display = '';
+        }
+      } finally {
+        const loading = document.getElementById('loading');
+        if (loading) loading.style.display = 'none';
+        summarizeBtn.disabled = false;
+      }
+    });
+  }
+</script>
+{% endblock %}
+
+

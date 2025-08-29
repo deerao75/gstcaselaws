@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Contact Us — GST Case Law Explorer{% endblock %}
+
+{% block head %}
+<style>
+  .page-wrap{ max-width:1100px; margin:18px auto; }
+  .grid{ display:grid; grid-template-columns: 1.2fr 1fr; gap:18px; }
+  .card{
+    background:#fff; border:1px solid #e8e8e8; border-radius:14px;
+    box-shadow:0 8px 22px rgba(0,0,0,0.06);
+  }
+  .panel{ padding:18px; }
+  .panel h2{
+    margin:0 0 12px 0; color:#111; font-weight:600;
+    font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+  }
+  .muted{ color:#666; }
+
+  /* Form */
+  .form-row{ display:flex; gap:12px; }
+  .form-col{ flex:1; }
+  label{ display:block; font-weight:600; color:#111; margin:8px 0 6px }
+  input[type="text"], input[type="email"], textarea{
+    width:100%; border:1.5px solid #dcdcdc; border-radius:10px; padding:12px;
+    font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+  }
+  textarea{ min-height:140px; resize:vertical; }
+  .actions{ display:flex; gap:10px; margin-top:10px; }
+  .btn{ display:inline-block; padding:10px 16px; border-radius:10px; border:1px solid #e0e0e0; background:#fff; cursor:pointer; }
+  .btn:hover{ background:#f7f7f7; }
+  .btn-orange{ background:#ff7a1a; color:#000; border-color:#d46613; font-weight:600; }
+  .btn-black{ background:#000; color:#fff; border-color:#000; }
+
+  /* Team box */
+  .team-wrap{
+    background:#f6f6f7; border:1px solid #ededed; border-radius:14px; padding:16px;
+  }
+  .team-grid{ display:grid; grid-template-columns:1fr; gap:12px; }
+  .member{ display:flex; gap:12px; align-items:center; background:#fff; border:1px solid #eaeaea; border-radius:12px; padding:10px; }
+  .avatar{
+    width:50px; height:50px; border-radius:50%; overflow:hidden;
+    border:2px solid #ffe1cc; display:flex; align-items:center; justify-content:center;
+    background:#fff5ee;
+  }
+  .avatar img{ width:100%; height:100%; object-fit:cover; }
+  .m-name{ font-weight:600; color:#111; }
+  .m-role{ color:#444; font-size:14px; }
+
+  @media (max-width: 980px){
+    .grid{ grid-template-columns:1fr; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-wrap">
+  <div class="grid">
+    <!-- Left: Contact form -->
+    <div class="card">
+      <div class="panel">
+        <h2>Contact Us</h2>
+        <div class="muted" style="margin-bottom:10px;">Have a question, idea, or feedback? Send us a note.</div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for cat, msg in messages %}
+              <div class="card" style="border:1px solid #e6f3e6; background:#f5fdf5; padding:10px; margin-bottom:10px; color:#184f1d;">
+                {{ msg }}
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <form method="post" action="{{ url_for('contact') }}">
+          <div class="form-row">
+            <div class="form-col">
+              <label for="name">Your Name</label>
+              <input type="text" id="name" name="name" placeholder="Enter your full name" required>
+            </div>
+            <div class="form-col">
+              <label for="email">Email</label>
+              <input type="email" id="email" name="email" placeholder="Enter your email" required>
+            </div>
+          </div>
+
+          <label for="subject">Subject</label>
+          <input type="text" id="subject" name="subject" placeholder="What is this about?">
+
+          <label for="message">Message</label>
+          <textarea id="message" name="message" placeholder="Type your message..."></textarea>
+
+          <div class="actions">
+            <button class="btn btn-orange" type="submit">Send Message</button>
+            <button class="btn btn-black" type="reset">Reset</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Right: Team members with light grey box -->
+    <div class="team-wrap">
+      <h2 style="margin:0 0 10px 0;">Team Members</h2>
+      <div class="team-grid">
+        {% for m in team %}
+        <div class="member">
+          <div class="avatar">
+            <img src="{{ url_for('static', filename=m.photo) }}" alt="{{ m.name }}">
+          </div>
+          <div>
+            <div class="m-name">{{ m.name }}</div>
+            <div class="m-role">{{ m.role }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+</div>
+{% endblock %}

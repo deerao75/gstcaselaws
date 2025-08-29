@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}{{ 'New Case' if mode=='new' else 'Edit Case' }}{% endblock %}
+
+{% block content %}
+<style>
+  :root{ --content-width: 1100px; }
+  .edit-wrap{
+    max-width: var(--content-width);
+    margin: 18px auto;
+    padding: 0 16px;
+  }
+  .card{
+    background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px;
+    box-shadow:0 4px 14px rgba(0,0,0,0.04);
+  }
+  .box{
+    background:#fafafa; border:1px solid #eee; border-radius:12px; padding:14px;
+  }
+
+  /* form grids (same as Add) */
+  .form-grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  .form-grid-4{ display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; }
+  @media (max-width: 900px){
+    .form-grid{ grid-template-columns: 1fr; }
+    .form-grid-4{ grid-template-columns: 1fr 1fr; }
+  }
+
+  .form-group label{ display:block; font-weight:800; margin-bottom:6px; }
+  .form-input{
+    width:100%; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;
+  }
+
+  .btn{ padding:8px 12px; border-radius:8px; text-decoration:none; display:inline-block; border:1px solid #e5e7eb; background:#fff; }
+  .btn-orange{ background:#f59e0b; color:#111; border-color:#f59e0b; font-weight:700; }
+  .btn-ghost{ background:#f3f4f6; color:#111; }
+  .actions{ margin-left:auto; display:flex; gap:8px; }
+
+  /* Wrapper (kept) */
+  .rich-wrap{ border:1px solid #e5e7eb; border-radius:10px; background:#fff; }
+
+  /* Ensure pasted tables/images look neat in editor content */
+  .tox .tox-edit-area__iframe body table{ border-collapse:collapse; width:100%; }
+  .tox .tox-edit-area__iframe body table,
+  .tox .tox-edit-area__iframe body th,
+  .tox .tox-edit-area__iframe body td{ border:1px solid #ddd; }
+  .tox .tox-edit-area__iframe body th,
+  .tox .tox-edit-area__iframe body td{ padding:6px; }
+  .tox .tox-edit-area__iframe body img{ max-width:100%; height:auto; }
+</style>
+
+<div class="edit-wrap">
+  <form method="post" class="card">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <h2 style="margin:0;">{{ 'Add New Case' if mode=='new' else 'Edit Case' }}</h2>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('admin_caselaws') }}">Cancel</a>
+        <button class="btn btn-orange" type="submit" onclick="return syncEditors();">Save</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <!-- Top 2x2 grid -->
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Case Law Number</label>
+          <input class="form-input" name="case_law_number" value="{{ r.case_law_number or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Name of the Party</label>
+          <input class="form-input" name="name_of_party" value="{{ r.name_of_party or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Date</label>
+          <input class="form-input" type="date" name="date" value="{{ r.date or '' }}">
+        </div>
+        <div class="form-group">
+          <label>State</label>
+          <input class="form-input" name="state" value="{{ r.state or '' }}">
+        </div>
+      </div>
+
+      <!-- 4-wide taxonomy grid -->
+      <div class="form-grid-4" style="margin-top:12px;">
+        <div class="form-group">
+          <label>Year</label>
+          <input class="form-input" name="year" value="{{ r.year or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Type of Court</label>
+          <input class="form-input" name="type_of_court" value="{{ r.type_of_court or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Industry</label>
+          <!-- keep original field name industry_sector as in your backend -->
+          <input class="form-input" name="industry_sector" value="{{ r.industry_sector or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Section</label>
+          <input class="form-input" name="section" value="{{ r.section or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Rules</label>
+          <input class="form-input" name="rule" value="{{ r.rule or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Subject Matter 1</label>
+          <input class="form-input" name="subject_matter1" value="{{ r.subject_matter1 or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Subject Matter 2</label>
+          <input class="form-input" name="subject_matter2" value="{{ r.subject_matter2 or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Case Name</label>
+          <input class="form-input" name="case_name" value="{{ r.case_name or '' }}">
+        </div>
+      </div>
+
+      <!-- Rich text sections (now TinyMCE on textareas) -->
+      <div style="margin-top:14px;" class="form-group">
+        <label>Citations</label>
+        <div class="rich-wrap">
+          <textarea id="e_citations" name="citation" class="form-input admin-rich">{{ r.citation|safe }}</textarea>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;" class="form-group">
+        <label>Basic Details</label>
+        <div class="rich-wrap">
+          <textarea id="e_basic_details" name="basic_detail" class="form-input admin-rich">{{ r.basic_detail|safe }}</textarea>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;" class="form-group">
+        <label>Head Notes</label>
+        <div class="rich-wrap">
+          <textarea id="e_head_notes" name="summary_head_note" class="form-input admin-rich">{{ r.summary_head_note|safe }}</textarea>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;" class="form-group">
+        <label>Question Answered</label>
+        <div class="rich-wrap">
+          <textarea id="e_question_answered" name="question_answered" class="form-input admin-rich">{{ r.question_answered|safe }}</textarea>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;" class="form-group">
+        <label>Full Case Law</label>
+        <div class="rich-wrap">
+          <textarea id="e_full_case_law" name="full_case_law" class="form-input admin-rich">{{ r.full_case_law|safe }}</textarea>
+        </div>
+      </div>
+
+      {% if r.id %}
+        <input type="hidden" name="id" value="{{ r.id }}">
+      {% endif %}
+
+      <div style="margin-top:14px;">
+        <button class="btn btn-orange" type="submit" onclick="return syncEditors();">Save Changes</button>
+        <a class="btn btn-ghost" href="{{ url_for('admin_caselaws') }}">Cancel</a>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- TinyMCE (rich editor with paste/table/image support) -->
+<script src="https://cdn.jsdelivr.net/npm/tinymce@6/tinymce.min.js" referrerpolicy="origin"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    tinymce.init({
+      selector: 'textarea.admin-rich',
+      height: 320,
+      menubar: 'file edit view insert format tools table help',
+      plugins: 'advlist autolink lists link image charmap preview anchor searchreplace visualblocks code fullscreen insertdatetime media table help wordcount paste codesample hr directionality nonbreaking',
+      toolbar: [
+        'undo redo | blocks fontfamily fontsize | bold italic underline strikethrough forecolor backcolor | alignleft aligncenter alignright alignjustify',
+        '| bullist numlist outdent indent | table image link hr blockquote codesample | superscript subscript removeformat | searchreplace code fullscreen'
+      ].join(' '),
+      paste_data_images: true,                 // allow paste images (base64) from Word/Docs
+      automatic_uploads: false,                // store images inline; no upload endpoint needed
+      convert_urls: false,
+      entity_encoding: 'raw',
+      paste_merge_formats: true,
+      paste_retain_style_properties: 'all',
+      content_style: 'body{font-family:Aptos,Segoe UI,system-ui,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111} table{border-collapse:collapse;width:100%} table,th,td{border:1px solid #ddd} th,td{padding:6px} img{max-width:100%;height:auto}'
+    });
+  });
+
+  // Keep the existing save hook; TinyMCE writes HTML back into the textareas
+  function syncEditors(){ tinymce.triggerSave(); return true; }
+</script>
+{% endblock %}

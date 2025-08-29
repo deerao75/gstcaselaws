@@ -1,0 +1,775 @@
+{% extends "base.html" %}
+{% block title %}Admin — {{ table_name or 'Case Laws' }}{% endblock %}
+
+{% block content %}
+<style>
+  :root{ --content-width: 1100px; }
+  .admin-wrap{
+    max-width: var(--content-width); margin: 18px auto; padding: 0 16px;
+    display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: start;
+  }
+  .side{
+    background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:12px;
+  }
+  .side h3{ margin:6px 0 10px; font-size:15px; }
+  .nav-btn, .nav-link{
+    width:100%; text-align:left; padding:10px 12px; border-radius:8px; border:1px solid #e5e7eb;
+    background:#fff; cursor:pointer; margin-bottom:8px; font-weight:700; display:block; text-decoration:none; color:#111;
+  }
+  .nav-btn.active, .nav-link.active{ background:#f59e0b1a; border-color:#f59e0b; }
+
+  .main .card{ background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:14px; box-shadow:0 4px 14px rgba(0,0,0,0.04); }
+  .panel{ display:none; }
+  .panel.show{ display:block; }
+
+  /* Search bar */
+  .search-row form{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .search-row input[type="text"]{
+    flex:1; min-width:260px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;
+  }
+  .btn{ padding:8px 12px; border-radius:8px; text-decoration:none; display:inline-block; border:1px solid #e5e7eb; background:#fff; }
+  .btn-orange{ background:#f59e0b; color:#111; border-color:#f59e0b; font-weight:700; }
+  .btn-ghost{ background:#f3f4f6; color:#111; }
+  .btn-danger{ background:#fee2e2; color:#991b1b; border-color:#fecaca; }
+  .pill{ display:inline-block; padding:4px 8px; border-radius:999px; background:#f3f4f6; color:#111; font-size:12px; }
+
+  /* Listing table */
+  table{ width:100%; border-collapse:collapse; table-layout: fixed; }
+  th, td{ padding:8px 6px; border-bottom:1px solid #eee; text-align:left; vertical-align:top; font-size:13px; }
+  .col-id{ width:60px; } .col-no{ width:220px; } .col-date{ width:120px; } .col-act{ width:160px; }
+  .nowrap{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* Form layout */
+  .form-grid{ display:grid; grid-template-columns: repeat(2, 1fr); gap:12px; }
+  .form-grid-4{ display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; }
+  .form-group label{ display:block; font-weight:800; margin-bottom:6px; }
+  .form-input, .form-text{
+    width:100%; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;
+  }
+  .box{
+    background:#fafafa; border:1px solid #eee; border-radius:12px; padding:14px;
+  }
+
+  /* Wrapper (kept) */
+  .rich-wrap{ border:1px solid #e5e7eb; border-radius:10px; background:#fff; }
+
+  /* Ensure pasted tables/images look neat in editor content */
+  .tox .tox-edit-area__iframe body table{ border-collapse:collapse; width:100%; }
+  .tox .tox-edit-area__iframe body table,
+  .tox .tox-edit-area__iframe body th,
+  .tox .tox-edit-area__iframe body td{ border:1px solid #ddd; }
+  .tox .tox-edit-area__iframe body th,
+  .tox .tox-edit-area__iframe body td{ padding:6px; }
+  .tox .tox-edit-area__iframe body img{ max-width:100%; height:auto; }
+
+  /* Bulk upload inline "excel" grid */
+  .grid-wrap{ margin-top:12px; }
+  .sheet-toolbar{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .sheet{ width:100%; border-collapse:collapse; }
+  .sheet th, .sheet td{ border:1px solid #ddd; padding:6px; font-size:13px; vertical-align:top; }
+  .sheet th{ background:#fafafa; position:sticky; top:0; z-index:1; }
+  .sheet td[contenteditable="true"]{ background:#fff; min-width:140px; }
+  .muted{ color:#666; font-size:12px; }
+</style>
+
+{% set mode = request.args.get('mode', (mode if mode is defined else 'edit')) %}
+
+<section class="admin-wrap">
+  <!-- LEFT MENU -->
+  <aside class="side">
+    <h3>Manage Case Laws</h3>
+    <button class="nav-btn" data-target="#panel-add">➕ Add New</button>
+    <a class="nav-link {% if mode=='edit' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=edit">✏️ Edit</a>
+    <a class="nav-link {% if mode=='delete' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=delete">🗑️ Delete</a>
+    <a class="nav-link" id="bulkDownloadLink" href="{{ url_for('admin_export_csv') }}">⬇️ Bulk Download</a>
+    <a class="nav-link" id="bulkUploadLink" href="{{ url_for('admin_bulk_upload') }}">⬆️ Bulk Upload</a>
+  </aside>
+
+  <!-- RIGHT CONTENT -->
+  <div class="main">
+
+    <!-- ADD NEW (hidden until clicked) -->
+    <div id="panel-add" class="panel">
+      <div class="card">
+        <h2 style="margin:0 0 8px 0;">Add New Case Law</h2>
+        <div class="box">
+          <form method="post" action="{{ url_for('admin_new_case') }}">
+            <!-- top grid -->
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Case Law Number</label>
+                <input class="form-input" type="text" name="case_law_number">
+              </div>
+              <div class="form-group">
+                <label>Name of the Party</label>
+                <input class="form-input" type="text" name="name_of_party">
+              </div>
+              <div class="form-group">
+                <label>Date</label>
+                <input class="form-input" type="date" name="date">
+              </div>
+              <div class="form-group">
+                <label>State</label>
+                <input class="form-input" type="text" name="state">
+              </div>
+            </div>
+
+            <!-- taxonomy grid -->
+            <div class="form-grid-4" style="margin-top:12px;">
+              <div class="form-group">
+                <label>Year</label>
+                <input class="form-input" type="text" name="year">
+              </div>
+              <div class="form-group">
+                <label>Type of Court</label>
+                <input class="form-input" type="text" name="type_of_court">
+              </div>
+              <div class="form-group">
+                <label>Industry</label>
+                <input class="form-input" type="text" name="industry">
+              </div>
+              <div class="form-group">
+                <label>Section</label>
+                <input class="form-input" type="text" name="section">
+              </div>
+              <div class="form-group">
+                <label>Rules</label>
+                <input class="form-input" type="text" name="rules">
+              </div>
+              <div class="form-group">
+                <label>Subject Matter 1</label>
+                <input class="form-input" type="text" name="subject_matter_1">
+              </div>
+              <div class="form-group">
+                <label>Subject Matter 2</label>
+                <input class="form-input" type="text" name="subject_matter_2">
+              </div>
+              <div class="form-group">
+                <label>Case Name</label>
+                <input class="form-input" type="text" name="case_name">
+              </div>
+            </div>
+
+            <!-- rich text editors (now TinyMCE on textareas) -->
+            <div style="margin-top:14px;" class="form-group">
+              <label>Citations</label>
+              <div class="rich-wrap">
+                <textarea id="citations" name="citations" class="form-text admin-rich"></textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Basic Details</label>
+              <div class="rich-wrap">
+                <textarea id="basic_details" name="basic_details" class="form-text admin-rich"></textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Head Notes</label>
+              <div class="rich-wrap">
+                <textarea id="head_notes" name="head_notes" class="form-text admin-rich"></textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Question Answered</label>
+              <div class="rich-wrap">
+                <textarea id="question_answered" name="question_answered" class="form-text admin-rich"></textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Full Case Law</label>
+              <div class="rich-wrap">
+                <textarea id="full_case_law" name="full_case_law" class="form-text admin-rich"></textarea>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label>Link to Full Case Law</label>
+              <input class="form-input" type="url" name="link">
+            </div>
+
+            <div style="margin-top:14px;">
+              <button class="btn btn-orange" type="submit" onclick="return syncAddEditors();">Save Case Law</button>
+              <button class="btn btn-ghost" type="button" onclick="document.getElementById('panel-add').classList.remove('show')">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- EDIT — SAME LAYOUT AS ADD (shown only when edit_item is provided) -->
+    {% if edit_item %}
+    <div id="panel-edit" class="panel show">
+      <div class="card">
+        <h2 style="margin:0 0 8px 0;">Edit Case Law #{{ edit_item.id }}</h2>
+        <div class="box">
+          <form method="post" action="{{ url_for('admin_edit_case', rid=edit_item.id) }}">
+            <!-- top grid -->
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Case Law Number</label>
+                <input class="form-input" type="text" name="case_law_number" value="{{ edit_item.case_law_number }}">
+              </div>
+              <div class="form-group">
+                <label>Name of the Party</label>
+                <input class="form-input" type="text" name="name_of_party" value="{{ edit_item.name_of_party }}">
+              </div>
+              <div class="form-group">
+                <label>Date</label>
+                <input class="form-input" type="date" name="date" value="{{ edit_item.date|default('', true) }}">
+              </div>
+              <div class="form-group">
+                <label>State</label>
+                <input class="form-input" type="text" name="state" value="{{ edit_item.state }}">
+              </div>
+            </div>
+
+            <!-- taxonomy grid -->
+            <div class="form-grid-4" style="margin-top:12px;">
+              <div class="form-group">
+                <label>Year</label>
+                <input class="form-input" type="text" name="year" value="{{ edit_item.year }}">
+              </div>
+              <div class="form-group">
+                <label>Type of Court</label>
+                <input class="form-input" type="text" name="type_of_court" value="{{ edit_item.type_of_court }}">
+              </div>
+              <div class="form-group">
+                <label>Industry</label>
+                <input class="form-input" type="text" name="industry" value="{{ edit_item.industry }}">
+              </div>
+              <div class="form-group">
+                <label>Section</label>
+                <input class="form-input" type="text" name="section" value="{{ edit_item.section }}">
+              </div>
+              <div class="form-group">
+                <label>Rules</label>
+                <input class="form-input" type="text" name="rules" value="{{ edit_item.rules }}">
+              </div>
+              <div class="form-group">
+                <label>Subject Matter 1</label>
+                <input class="form-input" type="text" name="subject_matter_1" value="{{ edit_item.subject_matter_1 }}">
+              </div>
+              <div class="form-group">
+                <label>Subject Matter 2</label>
+                <input class="form-input" type="text" name="subject_matter_2" value="{{ edit_item.subject_matter_2 }}">
+              </div>
+              <div class="form-group">
+                <label>Case Name</label>
+                <input class="form-input" type="text" name="case_name" value="{{ edit_item.case_name }}">
+              </div>
+            </div>
+
+            <!-- rich text editors with existing HTML -->
+            <div style="margin-top:14px;" class="form-group">
+              <label>Citations</label>
+              <div class="rich-wrap">
+                <textarea id="e_citations" name="citations" class="form-text admin-rich">{{ edit_item.citations|safe }}</textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Basic Details</label>
+              <div class="rich-wrap">
+                <textarea id="e_basic_details" name="basic_details" class="form-text admin-rich">{{ edit_item.basic_details|safe }}</textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Head Notes</label>
+              <div class="rich-wrap">
+                <textarea id="e_head_notes" name="head_notes" class="form-text admin-rich">{{ edit_item.head_notes|safe }}</textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Question Answered</label>
+              <div class="rich-wrap">
+                <textarea id="e_question_answered" name="question_answered" class="form-text admin-rich">{{ edit_item.question_answered|safe }}</textarea>
+              </div>
+            </div>
+            <div style="margin-top:14px;" class="form-group">
+              <label>Full Case Law</label>
+              <div class="rich-wrap">
+                <textarea id="e_full_case_law" name="full_case_law" class="form-text admin-rich">{{ edit_item.full_case_law|safe }}</textarea>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label>Link to Full Case Law</label>
+              <input class="form-input" type="url" name="link" value="{{ edit_item.link }}">
+            </div>
+
+            <div style="margin-top:14px;">
+              <button class="btn btn-orange" type="submit" onclick="return syncEditEditors();">Save Changes</button>
+              <a class="btn btn-ghost" href="{{ url_for('admin_caselaws') }}">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- SEARCH (default visible; no auto-listing unless q provided) -->
+    <div id="panel-search" class="panel {% if not edit_item and mode!='delete' %}show{% endif %}">
+      <div class="card">
+        <h2 style="margin:0 0 8px 0;">Search Case Laws</h2>
+        <form method="get" action="{{ url_for('admin_caselaws') }}" class="box">
+          <div class="search-row">
+            <input type="text" name="q" value="{{ q or '' }}" placeholder="Case No., Party, Section, Industry…">
+            <input type="hidden" name="page" value="1">
+            <input type="hidden" name="per_page" value="{{ per_page or 20 }}">
+            <input type="hidden" name="mode" value="edit">
+            <button class="btn btn-orange" type="submit">Search</button>
+            {% if q %}<a class="btn btn-ghost" href="{{ url_for('admin_caselaws') }}">Clear</a>{% endif %}
+            {% if q %}<span class="pill">Filtered</span>{% endif %}
+          </div>
+        </form>
+
+        {% if q %}
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-id">ID</th>
+                <th class="col-no">Case No.</th>
+                <th>Name of Party</th>
+                <th class="col-date">Date</th>
+                <th>State</th>
+                <th class="col-act">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in rows %}
+              <tr>
+                <td class="nowrap">{{ r.id }}</td>
+                <td class="nowrap" title="{{ r.case_law_number }}">{{ r.case_law_number }}</td>
+                <td title="{{ r.name_of_party }}">{{ r.name_of_party }}</td>
+                <td class="nowrap">{{ r.date }}</td>
+                <td class="nowrap">{{ r.state }}</td>
+                <td>
+                  <a class="btn" href="{{ url_for('admin_edit_case', rid=r.id) }}">Edit</a>
+                  <form style="display:inline;" method="post" action="{{ url_for('admin_delete_case', rid=r.id) }}" onsubmit="return confirmDelete('{{ r.case_law_number|e }}');">
+                    <button class="btn btn-danger" type="submit">Delete</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+              {% if not rows %}
+              <tr><td colspan="6" class="muted">No results.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+
+        {% set pages = (total // per_page) + (1 if total % per_page else 0) %}
+        {% if pages > 1 %}
+        <div style="margin-top:12px; text-align:right;">
+          {% for p in range(1, pages+1) %}
+            {% if p == page %}
+              <span class="pill">Page {{ p }}</span>
+            {% else %}
+              <a class="btn" href="?page={{p}}&per_page={{per_page}}&q={{q|urlencode}}&mode=edit">{{p}}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- DELETE (same search UI; stays in delete mode) -->
+    <div id="panel-delete" class="panel {% if mode=='delete' and not edit_item %}show{% endif %}">
+      <div class="card">
+        <h2 style="margin:0 0 8px 0;">Delete Case Laws</h2>
+        <form method="get" action="{{ url_for('admin_caselaws') }}" class="box">
+          <div class="search-row">
+            <input type="text" name="q" value="{{ q or '' }}" placeholder="Case No., Party, Section, Industry…">
+            <input type="hidden" name="page" value="1">
+            <input type="hidden" name="per_page" value="{{ per_page or 20 }}">
+            <input type="hidden" name="mode" value="delete">
+            <button class="btn btn-orange" type="submit">Search</button>
+            {% if q %}<a class="btn btn-ghost" href="{{ url_for('admin_caselaws', mode='delete') }}">Clear</a>{% endif %}
+            {% if q %}<span class="pill">Filtered</span>{% endif %}
+          </div>
+        </form>
+
+        {% if q %}
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-id">ID</th>
+                <th class="col-no">Case No.</th>
+                <th>Name of Party</th>
+                <th class="col-date">Date</th>
+                <th class="col-act">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in rows %}
+              <tr>
+                <td class="nowrap">{{ r.id }}</td>
+                <td class="nowrap" title="{{ r.case_law_number }}">{{ r.case_law_number }}</td>
+                <td title="{{ r.name_of_party }}">{{ r.name_of_party }}</td>
+                <td class="nowrap">{{ r.date }}</td>
+                <td>
+                  <form style="display:inline;" method="post"
+                      action="{{ url_for('admin_delete_case', rid=r.id) }}"
+                      onsubmit="return confirmDelete('{{ r.case_law_number|e }}');">
+                  <button class="btn btn-danger" type="submit">Delete</button>
+                </form>
+
+                </td>
+              </tr>
+              {% endfor %}
+              {% if not rows %}
+              <tr><td colspan="5" class="muted">No results.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+
+        {% set pages = (total // per_page) + (1 if total % per_page else 0) %}
+        {% if pages > 1 %}
+        <div style="margin-top:12px; text-align:right;">
+          {% for p in range(1, pages+1) %}
+            {% if p == page %}
+              <span class="pill">Page {{ p }}</span>
+            {% else %}
+              <a class="btn" href="?page={{p}}&per_page={{per_page}}&q={{q|urlencode}}&mode=delete">{{p}}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- BULK UPLOAD INLINE PANEL (Excel-like editor) -->
+    <div id="panel-bulkupload" class="panel">
+      <div class="card">
+        <h2 style="margin:0 0 8px 0;">Bulk Upload — Excel Sheet</h2>
+        <div class="box">
+          <p class="muted">Paste data from Excel/Word directly into the grid. Columns are ordered like the “Add New Case Law” form. <br>Full Case Law is intentionally excluded.</p>
+
+          <div class="sheet-toolbar">
+            <button class="btn" id="addRowsBtn" type="button">+ Add 20 rows</button>
+            <button class="btn" id="saveXlsxBtn" type="button">💾 Save Excel</button>
+            <button class="btn btn-orange" id="uploadXlsxBtn" type="button">⬆️ Upload to Database</button>
+            <button class="btn btn-ghost" id="closeUploadBtn" type="button">Close</button>
+          </div>
+
+          <div class="grid-wrap" style="overflow:auto; max-height:60vh; border:1px solid #eee; border-radius:10px;">
+            <table class="sheet" id="uploadSheet">
+              <thead><tr id="uploadHead"></tr></thead>
+              <tbody id="uploadBody"></tbody>
+            </table>
+          </div>
+
+          <p class="muted" style="margin-top:8px;">Tip: You can paste multi-row data; the grid expands automatically.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- TinyMCE (rich editor with paste/table/image support) -->
+<script src="https://cdn.jsdelivr.net/npm/tinymce@6/tinymce.min.js" referrerpolicy="origin"></script>
+<!-- CSV + XLSX helpers -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+<script>
+  // Toggle Add panel on left-menu click (unchanged)
+  (function(){
+    const addBtn = document.querySelector('.nav-btn[data-target="#panel-add"]');
+    const addPanel = document.getElementById('panel-add');
+    if (addBtn && addPanel) {
+      addBtn.addEventListener('click', function(){
+        document.querySelectorAll('.panel').forEach(p=>p.classList.remove('show'));
+        addPanel.classList.add('show');
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      });
+    }
+  })();
+
+  // Confirm delete (unchanged)
+  function confirmDelete(caseno){
+    return confirm("Are you sure you want to permanently delete this case?\n\nCase: " + (caseno || 'selected record') + "\n\nThis action cannot be undone.");
+  }
+
+  // ---- TinyMCE setup for all rich fields ----
+  document.addEventListener('DOMContentLoaded', function(){
+    tinymce.init({
+      selector: 'textarea.admin-rich',
+      height: 320,
+      menubar: 'file edit view insert format tools table help',
+      plugins: 'advlist autolink lists link image charmap preview anchor searchreplace visualblocks code fullscreen insertdatetime media table help wordcount paste codesample hr directionality nonbreaking',
+      toolbar: [
+        'undo redo | blocks fontfamily fontsize | bold italic underline strikethrough forecolor backcolor | alignleft aligncenter alignright alignjustify',
+        '| bullist numlist outdent indent | table image link hr blockquote codesample | superscript subscript removeformat | searchreplace code fullscreen'
+      ].join(' '),
+      paste_data_images: true,
+      automatic_uploads: false,
+      convert_urls: false,
+      entity_encoding: 'raw',
+      paste_merge_formats: true,
+      paste_retain_style_properties: 'all',
+      content_style: 'body{font-family:Aptos,Segoe UI,system-ui,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111} table{border-collapse:collapse;width:100%} table,th,td{border:1px solid #ddd} th,td{padding:6px} img{max-width:100%;height:auto}',
+    });
+  });
+
+  // Keep button hooks; just ensure TinyMCE writes back into textareas
+  function syncAddEditors(){ tinymce.triggerSave(); return true; }
+  function syncEditEditors(){ tinymce.triggerSave(); return true; }
+
+  // =========================
+  // BULK DOWNLOAD (clean CSV)
+  // =========================
+  (function(){
+    const link = document.getElementById('bulkDownloadLink');
+    if (!link) return;
+
+    // Column order matching Add New (minus Full Case Law)
+    const COLS = [
+      {label:'Case Law Number', db:'case_law_number'},
+      {label:'Name of the Party', db:'name_of_party'},
+      {label:'Date', db:'date'},
+      {label:'State', db:'state'},
+      {label:'Year', db:'year'},
+      {label:'Type of Court', db:'type_of_court'},
+      {label:'Industry', db:'industry_sector'}, // 'industry' alias supported below
+      {label:'Section', db:'section'},
+      {label:'Rules', db:'rule'},               // 'rules' alias supported below
+      {label:'Subject Matter 1', db:'subject_matter1'}, // alias: subject_matter_1
+      {label:'Subject Matter 2', db:'subject_matter2'}, // alias: subject_matter_2
+      {label:'Case Name', db:'case_name'},
+      {label:'Citations', db:'citation'},       // alias: citations
+      {label:'Basic Details', db:'basic_detail'}, // alias: basic_details
+      {label:'Head Notes', db:'summary_head_note'}, // alias: head_notes
+      {label:'Question Answered', db:'question_answered'},
+      {label:'Link to Full Case Law', db:'link'}
+    ];
+
+    const ALIASES = {
+      industry_sector: ['industry'],
+      rule: ['rules'],
+      subject_matter1: ['subject_matter_1'],
+      subject_matter2: ['subject_matter_2'],
+      citation: ['citations'],
+      basic_detail: ['basic_details'],
+      summary_head_note: ['head_notes'],
+      date: ['Date','date_of_decision','Date of Decision'],
+      case_law_number: ['Case No.','case_no'],
+      name_of_party: ['Party','party']
+    };
+
+    function pick(row, key){
+      if (row.hasOwnProperty(key)) return row[key];
+      const aliases = ALIASES[key] || [];
+      for (const a of aliases){
+        if (row.hasOwnProperty(a)) return row[a];
+      }
+      return '';
+    }
+
+    link.addEventListener('click', async function(ev){
+      ev.preventDefault();
+      try{
+        const res = await fetch(link.href, { credentials: 'same-origin' });
+        const text = await res.text();
+
+        // Parse the original (possibly messy) CSV
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        const rows = parsed.data || [];
+
+        // Rebuild in desired order & drop Full Case Law entirely
+        const clean = rows.map(r => {
+          const obj = {};
+          COLS.forEach(c => { obj[c.label] = pick(r, c.db); });
+          return obj;
+        });
+
+        const csv = Papa.unparse(clean);
+        const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'cases_clean.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }catch(e){
+        alert('Download failed. Please try again.');
+        console.error(e);
+      }
+    });
+  })();
+
+  // ===============================================
+  // BULK UPLOAD INLINE "EXCEL" (build & post XLSX)
+  // ===============================================
+  (function(){
+    const openLink = document.getElementById('bulkUploadLink');
+    const panel = document.getElementById('panel-bulkupload');
+    const head = document.getElementById('uploadHead');
+    const body = document.getElementById('uploadBody');
+    const addRowsBtn = document.getElementById('addRowsBtn');
+    const saveBtn = document.getElementById('saveXlsxBtn');
+    const uploadBtn = document.getElementById('uploadXlsxBtn');
+    const closeBtn = document.getElementById('closeUploadBtn');
+
+    if (!openLink || !panel) return;
+
+    // Column order & mapping (labels shown to user; db keys used in file)
+    const COLS = [
+      {label:'Case Law Number', db:'case_law_number'},
+      {label:'Name of the Party', db:'name_of_party'},
+      {label:'Date', db:'date'},
+      {label:'State', db:'state'},
+      {label:'Year', db:'year'},
+      {label:'Type of Court', db:'type_of_court'},
+      {label:'Industry', db:'industry_sector'},
+      {label:'Section', db:'section'},
+      {label:'Rules', db:'rule'},
+      {label:'Subject Matter 1', db:'subject_matter1'},
+      {label:'Subject Matter 2', db:'subject_matter2'},
+      {label:'Case Name', db:'case_name'},
+      {label:'Citations', db:'citation'},
+      {label:'Basic Details', db:'basic_detail'},
+      {label:'Head Notes', db:'summary_head_note'},
+      {label:'Question Answered', db:'question_answered'},
+      {label:'Link to Full Case Law', db:'link'}
+    ];
+
+    function ensureHeader(){
+      head.innerHTML = '';
+      COLS.forEach(c=>{
+        const th = document.createElement('th');
+        th.textContent = c.label;
+        head.appendChild(th);
+      });
+    }
+    function addRows(n){
+      for(let i=0;i<n;i++){
+        const tr = document.createElement('tr');
+        COLS.forEach(()=> {
+          const td = document.createElement('td');
+          td.contentEditable = "true";
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      }
+    }
+    function clearSheet(){
+      body.innerHTML = '';
+      addRows(30);
+    }
+
+    // Paste support: paste TSV/CSV into first selected cell (basic)
+    body.addEventListener('paste', function(e){
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      if (!text) return;
+      const rows = text.split(/\r?\n/).filter(r=>r.length);
+      const startCell = document.activeElement && document.activeElement.tagName === 'TD'
+        ? document.activeElement
+        : null;
+      if (!startCell) return; // let browser handle
+      e.preventDefault();
+
+      const startRow = startCell.parentElement.rowIndex - 1; // minus header
+      const startCol = [...startCell.parentElement.children].indexOf(startCell);
+
+      // ensure enough rows
+      const needed = startRow + rows.length - body.children.length;
+      if (needed > 0) addRows(needed+2);
+
+      rows.forEach((rowText, rIdx)=>{
+        const cols = rowText.split(/\t|,/);
+        const tr = body.children[startRow + rIdx];
+        cols.forEach((val, cIdx)=>{
+          const td = tr.children[startCol + cIdx];
+          if (td) td.textContent = val;
+        });
+      });
+    });
+
+    function tableToData(){
+      const data = [];
+      [...body.children].forEach(tr=>{
+        const obj = {};
+        let empty = true;
+        COLS.forEach((c, i)=>{
+          const v = (tr.children[i].textContent || '').trim();
+          if (v) empty = false;
+          obj[c.db] = v;
+        });
+        if (!empty) data.push(obj);
+      });
+      return data;
+    }
+
+    function saveExcel(){
+      const rows = tableToData();
+      // First row as header with DB keys (so backend mapping is clean)
+      const aoa = [COLS.map(c=>c.db)];
+      rows.forEach(r=>{
+        aoa.push(COLS.map(c=> r[c.db] || ''));
+      });
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'cases');
+      XLSX.writeFile(wb, 'cases_upload.xlsx');
+    }
+
+    async function uploadExcel(){
+      const rows = tableToData();
+      if (rows.length === 0){
+        alert('No data to upload.');
+        return;
+      }
+      // Build XLSX in-memory
+      const aoa = [COLS.map(c=>c.db)];
+      rows.forEach(r=> aoa.push(COLS.map(c=> r[c.db] || '')));
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'cases');
+      const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+
+      const blob = new Blob([wbout], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      const form = new FormData();
+      form.append('file', blob, 'cases_upload.xlsx');
+
+      try{
+        const res = await fetch('{{ url_for("admin_bulk_upload") }}', {
+          method: 'POST',
+          body: form
+        });
+        if (res.redirected){
+          window.location.href = res.url;  // honor backend flash/redirect
+        }else{
+          alert('Upload completed.');
+        }
+      }catch(err){
+        console.error(err);
+        alert('Upload failed.');
+      }
+    }
+
+    // Show/hide panel
+    openLink.addEventListener('click', function(e){
+      e.preventDefault();
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('show'));
+      panel.classList.add('show');
+      ensureHeader();
+      if (!body.children.length) addRows(30);
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    });
+    addRowsBtn.addEventListener('click', ()=> addRows(20));
+    saveBtn.addEventListener('click', saveExcel);
+    uploadBtn.addEventListener('click', uploadExcel);
+    closeBtn.addEventListener('click', ()=>{
+      panel.classList.remove('show');
+    });
+  })();
+</script>
+{% endblock %}

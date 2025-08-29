@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Bulk Upload — Case Laws{% endblock %}
+{% block content %}
+<div style="max-width:800px; margin:24px auto; padding:16px; background:#fff; border:1px solid #e5e7eb; border-radius:12px;">
+  <h2 style="margin:0 0 12px 0;">Bulk Upload Case Laws</h2>
+  <p>Upload a CSV or Excel file with columns like:
+    <em>Case Law Number, Name of the Party, State, Year, Type of Court, Industry, Section, Rules, Subject Matter 1, Subject Matter 2, Case Name, Date, Citations, Basic Details, Head Notes, Question Answered, Full Case Law, Link</em>.
+  </p>
+  <form method="post" enctype="multipart/form-data" style="margin-top:12px;">
+    <input type="file" name="file" accept=".csv,.xlsx,.xls" required>
+    <button type="submit" style="margin-left:8px; background:#f59e0b; color:#111; border:1px solid #f59e0b; border-radius:8px; padding:8px 12px; font-weight:700; cursor:pointer;">Upload</button>
+  </form>
+</div>
+{% endblock %}
+

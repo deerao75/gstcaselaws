@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}GST Case Law Explorer{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <style>
+    :root{
+      --black:#0b0b0b;
+      --orange:#FFA500;          /* toned-down orange */
+      --orange-faint: rgba(255,122,26,0.16);
+      --border:#e8e8e8;
+      --text:#111;
+      --muted:#666;
+      --white:#ffffff;
+      --bg-soft:#f7f7f8;         /* light grey for filter area/cards */
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:#ffffff; color:var(--text);
+      font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+    }
+    a{ color:var(--text); text-decoration:none }
+
+    /* Header + Footer stay black */
+    .topbar{ background:var(--black); color:#fff; }
+    .topbar .wrap{ max-width:1200px; margin:0 auto; display:flex; align-items:center; gap:18px; padding:12px 16px; }
+    .logo{ width:42px; height:42px; border-radius:8px; background:var(--orange); display:flex; align-items:center; justify-content:center; font-weight:800; color:#000; }
+    .brand{ font-size:20px; font-weight:700; letter-spacing:.3px; color:#fff; }
+    nav a{ margin-left:16px; color:#eee; opacity:.9 }
+    nav a:hover{ color:var(--orange) }
+
+    .container{ max-width:1200px; margin:0 auto; padding:18px 16px; }
+    .card{ background:#fff; border:1px solid var(--border); border-radius:12px; }
+    table{ border-collapse:collapse; width:100%; }
+    th,td{ border-bottom:1px solid var(--border); padding:10px; text-align:left; vertical-align:top; }
+    th{ background:#fafafa; }
+
+    .btn{ display:inline-block; padding:10px 14px; border-radius:10px; border:1px solid #dcdcdc; background:#fff; color:var(--text); }
+    .btn:hover{ background:#f7f7f7 }
+    .btn-orange{ background:var(--orange); color:#000; border-color:#d46613; }
+    .btn-orange:hover{ filter:brightness(0.98) }
+    .pill{ background:#f6f6f6; border:1px solid #e3e3e3; border-radius:999px; padding:4px 8px; color:#444; font-size:12px; }
+
+    input, select, textarea{ background:#fff; color:var(--text); border:1px solid #ddd; border-radius:10px; padding:10px; }
+    input::placeholder, textarea::placeholder{ color:#9a9a9a }
+    .muted{ color:var(--muted) }
+
+    .footer{ background:var(--black); color:#c9c9c9; margin-top:40px; }
+    .footer .wrap{ max-width:1200px; margin:0 auto; padding:24px 16px; display:grid; grid-template-columns:2fr 1fr 2fr 2fr; gap:22px; }
+    .footer h4{ margin:0 0 10px 0; color:#fff }
+    @media (max-width:900px){ .footer .wrap{ grid-template-columns:1fr } nav{ margin-left:auto } }
+  </style>
+
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <img src="{{ url_for('static', filename='images/acer_logo.png') }}"
+         alt="Acer" style="height:32px; width:auto; margin-right:10px;">
+      <div class="brand">GST Case Law Explorer</div>
+      <nav style="margin-left:auto;">
+        <a href="{{ url_for('home') }}">Home</a>
+        <a href="{{ url_for('contact') }}">Contact Us</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+      {% if msgs %}
+        <div class="card" style="padding:10px 14px; margin-bottom:10px;">
+          {% for cat, m in msgs %}
+            <div>{{ m }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer" id="contact">
+    <div class="wrap">
+      <div>
+        <h4>GST Case Law Explorer</h4>
+        <p>Search and study curated GST case laws with powerful filters.</p>
+        <small>© {{ 2025 }} GST Case Law Explorer</small>
+      </div>
+      <div>
+        <h4>Quick Links</h4>
+        <p><a href="{{ url_for('home') }}" style="color:#c9c9c9">Home</a></p>
+        <p><a href="{{ url_for('contact') }}" style="color:#c9c9c9">Contact Us</a></p>
+      </div>
+      <div>
+        <h4>Who we are?</h4>
+        <p>Acer Tax & Corporate Services LLP</p>
+        <p>No.8, 3rd Floor, Serpentine Road,
+         Kumarapark East, Bangalore - 560020</p>
+        <p><a href="mailto:info@acertax.com" style="color:#c9c9c9">info@acertax.com</a></p>
+      </div>
+      <div>
+        <h4>Disclaimer</h4>
+        <p>For research/education only. Please consult the actual judgments and legal counsel for advice.</p>
+        <p><a href="#" style="color:#c9c9c9">Terms &amp; Conditions</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
