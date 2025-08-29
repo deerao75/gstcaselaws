@@ -1,14 +1,13 @@
 from flask import Flask, request, render_template, abort, redirect, url_for, flash, send_file, jsonify, render_template_string
 from sqlalchemy import create_engine, MetaData, Table, select, or_, func, text, and_, insert, update, delete
 from bs4 import BeautifulSoup
-import os, re, io, ssl
+import os, re, io, ssl, json
 import pandas as pd
 from collections import defaultdict
 from datetime import date, datetime
 
 # ======================= DB CONFIG =======================
-import os, ssl
-
+# (Render/TiDB-safe: no hardcoded Windows CA path; supports Secret Files)
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
 
@@ -127,6 +126,46 @@ def _openai_chat(messages, max_tokens=800, temperature=0.4):
             return (resp["choices"][0]["message"]["content"] or "").strip()
         except Exception as e_old:
             raise RuntimeError(f"OpenAI call failed: {e_old or e_new}")
+
+def _openai_chat_json(messages, model=None, max_tokens=900, temperature=0.3):
+    """
+    JSON-mode helper for Chat Completions.
+    Returns a dict. Falls back to legacy SDK and tries to parse JSON.
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
+    model = model or OPENAI_MODEL or "gpt-4o-mini"
+
+    # New SDK path
+    try:
+        from openai import OpenAI  # type: ignore
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        content = resp.choices[0].message.content or "{}"
+        return json.loads(content)
+    except Exception:
+        # Legacy fallback: instruct JSON and parse
+        import openai  # type: ignore
+        openai.api_key = OPENAI_API_KEY
+        _msgs = messages + [{"role": "system", "content": "Return a single JSON object as your entire reply."}]
+        resp = openai.ChatCompletion.create(
+            model=model,
+            messages=_msgs,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        raw = resp["choices"][0]["message"]["content"] or "{}"
+        try:
+            return json.loads(raw)
+        except Exception:
+            m = re.search(r"\{.*\}", raw, flags=re.S)
+            return json.loads(m.group(0)) if m else {}
 
 # ======================= HELPERS =======================
 def like_filters(q: str):
@@ -488,7 +527,30 @@ def _fetch_rows_for_current_filters(args, cap=60):
         ).mappings().all()
     return [dict(r) for r in rows]
 
+def _build_llm_docs(rows):
+    """Turn DB rows into compact docs the model can cite."""
+    docs = []
+    for r in rows:
+        case_no = str(r.get("case_law_number") or "").strip()
+        party   = str(r.get("name_of_party") or "").strip()
+        year    = str(r.get("year") or "").strip()
+        court   = str(r.get("type_of_court") or "").strip()
+        state   = str(r.get("state") or "").strip()
+        head    = _strip_all_html(r.get("summary_head_note") or "")
+        head    = re.sub(r"\s+", " ", head).strip()
+        docs.append({
+            "id": r.get("id"),
+            "case_no": case_no,
+            "party": party,
+            "year": year,
+            "court": court,
+            "state": state,
+            "headnote_clean": head[:1200],
+        })
+    return docs
+
 def _compose_case_lines(rows, max_chars=220):
+    # kept for compatibility; not used by JSON-mode summarizer
     lines = []
     for r in rows:
         case_no = str(r.get("case_law_number") or "").strip()
@@ -513,41 +575,50 @@ def _compose_case_lines(rows, max_chars=220):
 @app.get("/summarize_results")
 def summarize_results():
     try:
-        rows = _fetch_rows_for_current_filters(request.args, cap=60)
+        rows = _fetch_rows_for_current_filters(request.args, cap=20)  # 8–20 is a sweet spot
         if not rows:
             return jsonify({"ok": False, "message": "No case law results to summarize for the current filters."})
 
-        # Build topic string from chosen filters
         topic = _selected_topic(request.args)
-        cases_text = _compose_case_lines(rows, max_chars=220)
+        docs  = _build_llm_docs(rows)
 
-        # Focused prompt: ONLY on the chosen filter topic.
-        prompt = (
-            "You are assisting a GST case-law researcher. Read the list of cases below and produce a concise, paragraph-only synthesis "
-            "STRICTLY about the specified topic.\n\n"
-            f"Topic: {topic}\n\n"
-            "Guidelines:\n"
-            "• Base your analysis primarily on the headnotes; only include points relevant to the topic.\n"
-            "• Do not drift to unrelated GST themes; ignore material outside the topic.\n"
-            "• Cite 3–6 cases by party or case number inline when they support a point.\n"
-            "• Write 2–4 tight paragraphs (no bullet points, no numbered lists, no markdown formatting, no asterisks).\n"
-            "• Do NOT include generic wrap-ups (e.g., beginning with 'Overall', 'In conclusion', 'In summary').\n\n"
-            f"Cases:\n{cases_text}\n\n"
-            "Now write the synthesis:"
+        # Build strict, topic-focused prompt; JSON-mode response
+        snippets = "\n".join(
+            f"- Case: {d['case_no']} — {d['party']} ({d.get('year','')}) | Court: {d.get('court','')} | State: {d.get('state','')}\n"
+            f"  Headnote: {d['headnote_clean']}"
+            for d in docs
         )
+        user_prompt = f"""
+Topic: {topic}
+Instruction: Write 2–4 tight paragraphs strictly about the Topic. Base only on these headnotes; ignore unrelated material.
+Cite 3–6 cases inline as [{{case_no}} — {{party}} ({{year}})]. No bullet points; paragraphs only. No generic wrap-ups.
 
-        raw = _openai_chat(
+Snippets:
+{snippets}
+
+Return JSON with keys:
+- answer: string (plain text paragraphs, no bullets)
+- citations: array of case ids used (from the input 'id')
+"""
+
+        data = _openai_chat_json(
             [
-                {"role": "system", "content": "You are a concise legal analyst for Indian GST jurisprudence."},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content":
+                 "You are a concise Indian GST legal analyst. Only use the supplied snippets; if insufficient, say so briefly."},
+                {"role": "user", "content": user_prompt}
             ],
-            max_tokens=700, temperature=0.4
+            model="gpt-4o-mini",
+            max_tokens=900, temperature=0.3
         )
 
-        summary = _clean_summary(raw)
-        if not summary:
+        answer    = _clean_summary((data or {}).get("answer", ""))
+        citations = (data or {}).get("citations", [])
+
+        if not answer.strip():
             return jsonify({"ok": False, "message": "The model returned an empty summary. Try refining filters and retry."})
-        return jsonify({"ok": True, "summary": summary})
+
+        # Keep original shape; extra 'citations' is harmless if the front-end ignores it
+        return jsonify({"ok": True, "summary": answer, "citations": citations})
 
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
