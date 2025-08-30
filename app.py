@@ -82,7 +82,7 @@ ALL_COLS = [
 SEARCHABLE_COLS = [
     "case_law_number","name_of_party","case_name","state",
     "section","rule","citation","industry_sector",
-    "summary_head_note","full_case_law"
+    "summary_head_note"#,"full_case_law"#
 ]
 
 # ======================= OPENAI CONFIG =======================
@@ -200,6 +200,72 @@ def like_filters(q: str):
         if hasattr(Acer.c, col):
             terms.append(func.lower(getattr(Acer.c, col)).like(f"%{q.lower()}%"))
     return or_(*terms) if terms else text("1=1")
+
+# ---- Natural Language Query helpers ----
+_STOPWORDS = {
+    "a","an","the","this","that","these","those","me","we","us","you","your","yours",
+    "give","show","find","get","provide","list","tell","display","search","look","fetch",
+    "please","kindly","need","want","would","like","to","for","on","about","regarding","related","with","in","of","by","under","and","or",
+    "cases","case","laws","law","caselaw","caselaws"
+}
+_KEEP_SHORT = {"itc","gst","rcm","hsn","pos","b2b","b2c"}
+_DOMAIN_PHRASES = [
+    "composition scheme","input tax credit","place of supply","reverse charge",
+    "works contract","advance ruling","e way bill","e-way bill","zero rated",
+    "export of services","intermediary services","blocked credit","time of supply",
+    "credit note","debit note","classification dispute","valuation","anti profiteering",
+    "refund of itc","job work","pure agent"
+]
+
+def _nlq_keywords(q: str):
+    """
+    Extract meaningful keywords/phrases from a natural-language query.
+    - lowers, removes punctuation (keeps hyphens), strips stopwords
+    - preserves domain phrases as single tokens if present
+    - returns deduped list in the original order of appearance
+    """
+    if not q: return []
+    s = q.lower()
+    # soft normalize punctuation (keep hyphen so 'e-way' works)
+    s = re.sub(r"[^\w\s\-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
+    kept = []
+    seen = set()
+
+    # detect domain phrases first (longest wins)
+    s_for_phrase = " " + s + " "
+    for ph in sorted(_DOMAIN_PHRASES, key=len, reverse=True):
+        ph_norm = " " + ph + " "
+        if ph_norm in s_for_phrase:
+            if ph not in seen:
+                kept.append(ph)
+                seen.add(ph)
+            # remove the phrase so its words don't reappear as singles
+            s_for_phrase = s_for_phrase.replace(ph_norm, " ")
+    # residual singles
+    residual = re.sub(r"\s+", " ", s_for_phrase).strip()
+    if residual:
+        for tok in residual.split():
+            if tok in _STOPWORDS:
+                continue
+            if len(tok) <= 2 and tok not in _KEEP_SHORT:
+                continue
+            if tok not in seen:
+                kept.append(tok); seen.add(tok)
+
+    return kept
+
+def _nlq_clause(query: str):
+    """
+    Build a SQLAlchemy clause that supports natural language:
+    AND over tokens, where each token is ORed over SEARCHABLE_COLS.
+    Fallback to simple like_filters if tokenization yields nothing.
+    """
+    toks = _nlq_keywords(query)
+    if not toks:
+        return like_filters(query)
+    return and_(*[like_filters(t) for t in toks])
 
 def _distinct(colname):
     # 5-minute cache to avoid repeated DB hits for dropdowns
@@ -424,7 +490,8 @@ def home():
         if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
         if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
         if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-        clauses.append(like_filters(keywords_for_search))
+        # NLQ clause instead of plain LIKE (handles "give me the case laws on ...")
+        clauses.append(_nlq_clause(keywords_for_search))
         where_expr = and_(*clauses) if clauses else text("1=1")
 
         page = max(int(request.args.get("page", 1) or 1), 1)
@@ -447,7 +514,7 @@ def home():
         if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
         if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
         if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-        if q:              clauses.append(like_filters(q))
+        if q:              clauses.append(_nlq_clause(q))   # <-- NLQ here too
         where_expr = and_(*clauses) if clauses else text("1=1")
 
         page = max(int(request.args.get("page", 1) or 1), 1)
@@ -524,7 +591,7 @@ def public_case_detail(rid: int):
     if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
     if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
     if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-    if q:              clauses.append(like_filters(q))
+    if q:              clauses.append(_nlq_clause(q))  # keep it consistent here too
     where_expr = and_(*clauses) if clauses else text("1=1")
 
     with ENGINE.connect() as conn:
@@ -570,9 +637,9 @@ def _fetch_rows_for_current_filters(args, cap=60):
     if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
     if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
     if is_ai_search and ai_q:
-        clauses.append(like_filters(ai_q))
+        clauses.append(_nlq_clause(ai_q))  # NLQ for AI input
     elif q:
-        clauses.append(like_filters(q))
+        clauses.append(_nlq_clause(q))     # NLQ for normal search
     where_expr = and_(*clauses) if clauses else text("1=1")
 
     with ENGINE.connect() as conn:
@@ -693,7 +760,7 @@ def admin_caselaws():
     page = max(int(request.args.get("page", 1)), 1)
     per_page = min(max(int(request.args.get("per_page", 20)), 1), 200)
     offset = (page - 1) * per_page
-    where_clause = like_filters(q) if q else text("1=1")
+    where_clause = _nlq_clause(q) if q else text("1=1")  # NLQ in admin search too
     with ENGINE.connect() as conn:
         total = conn.execute(select(func.count()).select_from(Acer).where(where_clause)).scalar_one()
         rows = conn.execute(
