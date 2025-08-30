@@ -77,13 +77,13 @@ ALL_COLS = [
     "question_answered","full_case_law",
 ]
 
-# Broadened search surface (strings only; avoid numeric/date types like year/date)
+# Search surface (fast & focused; explicitly NOT scanning full_case_law)
 SEARCHABLE_COLS = [
     "case_law_number","name_of_party","case_name","state",
     "section","rule","citation","industry_sector",
     "subject_matter1","subject_matter2",
     "basic_detail","question_answered",
-    "summary_head_note",#"full_case_law",#   # include full text for recall
+    "summary_head_note",
     "type_of_court"
 ]
 
@@ -173,12 +173,14 @@ def _meta_cache_set(name: str, value, ttl_sec: int = 300):
 
 # ======================= SEARCH HELPERS =======================
 def like_filters(q: str):
-    """OR across SEARCHABLE_COLS using LIKE (case-insensitive)."""
-    ql = q.lower()
+    """
+    OR across SEARCHABLE_COLS using LIKE (case-insensitive under typical MySQL *_ci collations).
+    NOTE: no LOWER() wrapper so indexes/collation can help -> faster.
+    """
     terms = []
     for col in SEARCHABLE_COLS:
         if hasattr(Acer.c, col):
-            terms.append(func.lower(getattr(Acer.c, col)).like(f"%{ql}%"))
+            terms.append(getattr(Acer.c, col).like(f"%{q}%"))
     return or_(*terms) if terms else text("1=1")
 
 _STOPWORDS = {
@@ -314,11 +316,11 @@ def _clean_summary(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text
 
-# ======================= AI EXPLANATION (DETAILED + CACHED) =======================
+# ======================= AI EXPLANATION (DETAILED + NO CASE NAMES) =======================
 def get_ai_explanation(prompt_text):
     args = request.args
     key_src = "|".join([
-        "ai_explain_v2", (prompt_text or "").strip(),
+        "ai_explain_v3", (prompt_text or "").strip(),
         ",".join(sorted(args.getlist("industry"))),
         ",".join(sorted(args.getlist("section"))),
         ",".join(sorted(args.getlist("rule"))),
@@ -340,20 +342,20 @@ def get_ai_explanation(prompt_text):
     filter_context = (" | ".join(context_bits)) if context_bits else "General GST"
 
     full_prompt = (
-        "You are an expert on Indian GST laws. Write a detailed, context-focused explanation in 2–4 compact paragraphs. "
-        "Stay tightly aligned to the user's query and the provided filter context; do not drift. "
-        "Mention relevant statutory anchors (CGST/IGST sections, rules, notifications/circulars) as applicable. "
-        "Avoid generic wrap-ups or bullet points. Plain paragraphs only.\n\n"
+        "You are an expert on Indian GST. Write 2–4 compact paragraphs that explain ONLY the statutory position: "
+        "focus on CGST/IGST Acts, Rules, relevant Notifications and Circulars. "
+        "Do NOT mention or invent ANY case names, parties, judges, or case citations. "
+        "NO bullet points, NO generic wrap-ups; just crisp paragraphs aligned to the query and filters.\n\n"
         f"Filter Context: {filter_context}\n"
         f"User Query: {(prompt_text or '').strip()}\n"
     )
     try:
         text = _openai_chat(
             [
-                {"role": "system", "content": "You are a precise Indian GST legal analyst. Be specific and grounded."},
+                {"role": "system", "content": "You are a precise Indian GST legal analyst. Never cite or name cases; stick to sections, rules, notifications, circulars."},
                 {"role": "user", "content": full_prompt},
             ],
-            max_tokens=700, temperature=0.35,
+            max_tokens=700, temperature=0.3,
         )
         _ai_cache_set(cache_key, text, ttl_sec=900)
         return {"text": text}
@@ -722,6 +724,7 @@ def admin_export_csv():
         rows = conn.execute(select(*cols).order_by(Acer.c.id.desc())).mappings().all()
     df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=[c.name for c in cols])
     buf = io.BytesIO()
+    # Excel-friendly: UTF-8 with BOM
     df.to_csv(buf, index=False, encoding="utf-8-sig")
     buf.seek(0)
     return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="cases.csv")

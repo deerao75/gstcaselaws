@@ -3,13 +3,11 @@
 
 {% block head %}
 <style>
-  /* Hero (centered) */
   .hero { text-align:center; }
   .hero h1{ margin:8px 0 0 0; font-size:44px; color:#111; font-weight:700; }
   .hero .sub{ margin:4px 0 18px 0; font-size:30px; color:var(--orange); font-weight:600; }
   .hero-wrap{ background:#fff; border-radius:14px; padding:20px; border:1px solid var(--border); color:#111;}
 
-  /* Wrapper with LIGHT GREY BG behind ALL filters + search + buttons */
   .filters-wrap{
     background:var(--bg-soft);
     border:1px solid #ededed;
@@ -25,19 +23,12 @@
     margin-top:22px;
   }
 
-  .section-heading {
-    font-weight: bold;
-    margin-bottom: 10px;
-    font-size: 18px;
-    color: #333;
-  }
+  .section-heading { font-weight: bold; margin-bottom: 10px; font-size: 18px; color: #333; }
 
-  /* Inside the wrapper */
   .filters{ position:relative; }
   .grid-3{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
   .grid-2{ display:grid; grid-template-columns:repeat(2,1fr); gap:14px; margin-top:12px; }
 
-  /* Popover dropdowns (no layout shift) with borders and selected preview */
   .dd{
     position:relative;
     border:1.5px solid var(--orange);
@@ -61,22 +52,16 @@
   }
   .dd.open > .dd-body{ display:block; }
 
-  /* Search box inside dropdowns */
   .search-in-filter{ width:100%; margin-bottom:10px; padding:10px; border-radius:10px; border:1px solid #e4e4e4; }
 
-  /* Options (no checkboxes) */
-  .opt{
-    display:flex; align-items:center; justify-content:space-between;
-    gap:10px; padding:8px 6px; border-radius:8px; cursor:pointer;
-    border:1px solid transparent;
-  }
+  .opt{ display:flex; align-items:center; justify-content:space-between;
+    gap:10px; padding:8px 6px; border-radius:8px; cursor:pointer; border:1px solid transparent; }
   .opt .label{ color:#222; }
   .opt:hover{ background:#fafafa; }
   .opt.selected{ background:var(--orange-faint); border-color:var(--orange); }
   .opt.selected .label{ font-weight:600; color:#000; }
   .subject-group b{ display:block; margin:6px 0 2px 0; color:#111; }
 
-  /* Search line sits INSIDE the grey wrapper now */
   .searchline{ display:flex; gap:10px; margin-top:12px; }
   .searchline textarea{
     flex:1; border:1.5px solid #000;
@@ -87,18 +72,12 @@
   .btn.btn-orange{ background:var(--orange); color:#fff; border-color:var(--orange); }
   .btn.btn-orange:hover{ filter:brightness(0.98); }
 
-  /* Loading overlay */
-  .loading-overlay{
-    position:fixed; inset:0; background:rgba(255,255,255,0.7);
-    display:none; align-items:center; justify-content:center; z-index:1000;
-  }
-  .spinner{
-    width:44px; height:44px; border:4px solid #ffd9bf; border-top-color:var(--orange); border-radius:50%;
-    animation:spin 0.8s linear infinite;
-  }
+  .loading-overlay{ position:fixed; inset:0; background:rgba(255,255,255,0.7);
+    display:none; align-items:center; justify-content:center; z-index:1000; }
+  .spinner{ width:44px; height:44px; border:4px solid #ffd9bf; border-top-color:var(--orange); border-radius:50%;
+    animation:spin 0.8s linear infinite; }
   @keyframes spin{ to{ transform:rotate(360deg); } }
 
-  /* Results */
   .results{ display:grid; grid-template-columns:1fr; gap:16px; margin-top:16px;}
   .result{
     padding:20px; border:2px solid #e6e6e6; border-radius:14px; background:#fbfbfb;
@@ -112,15 +91,12 @@
   .prose, .prose * { text-align: justify; }
   .hint{ color:#666; font-size:12px; }
 
-  /* Highlight for matched full phrase in results */
   .hl{ background:var(--orange-faint); border-radius:3px; padding:0 2px; }
 
-  /* Pagination */
   .pagi{ display:flex; gap:8px; justify-content:flex-end; margin-top:12px; align-items:center; flex-wrap:wrap; }
   .pagi .btn{ padding:8px 10px; }
   .pagi .pill{ padding:6px 10px; }
 
-  /* Sub-filter bar above results */
   .refine{
     display:flex; gap:10px; align-items:center; flex-wrap:wrap;
     background:#fff; border:1px solid #e6e6e6; border-radius:12px; padding:10px 12px; margin-top:12px;
@@ -131,22 +107,13 @@
     min-width:160px; font-size:14px;
   }
 
-  /* AI / Summary Sections */
-  .ai-response {
-    margin-top: 20px;
-    padding: 20px;
-    border: 1px solid #e6e6e6;
-    border-radius: 14px;
-    background: #fff;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-  }
+  .ai-response { margin-top: 20px; padding: 20px; border: 1px solid #e6e6e6; border-radius: 14px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
   .ai-response h3 { margin-top: 0; color: #111; font-size: 20px; }
   .ai-response .ai-text {
     white-space: pre-wrap;
     font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
     font-size:15px; line-height:1.6; text-align: justify;
   }
-  .ai-response .error { color: red; font-weight: bold; }
 
   @media (max-width:900px){
     .grid-3{ grid-template-columns:1fr; }
@@ -157,15 +124,6 @@
     .refine select { min-width: auto; }
   }
   .btn{ cursor:pointer; }
-
-  /* AI / Summary text: justified + Aptos 15px */
-  .ai-response .ai-text {
-    white-space: pre-wrap;
-    font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
-    font-size:15px;
-    line-height:1.6;
-    text-align: justify;
-  }
 </style>
 {% endblock %}
 
@@ -181,19 +139,13 @@
   <div class="spinner" aria-label="Searching…"></div>
 </div>
 
-<!-- LIGHT GREY BACKGROUND WRAPPER FOR FILTERS -->
+<!-- FILTERS -->
 <div class="filters-wrap">
   <div class="section-heading">Search by topic</div>
   <form method="get" class="filters" id="filtersForm">
-    <!-- ROW 1: Industry, Section, RULES -->
     <div class="grid-3">
-      <!-- Industry -->
       <div class="dd" data-dd>
-        <div class="dd-summary">
-          <span class="title">Industry</span>
-          <span class="sel muted" data-sel></span>
-          <span class="car">▾</span>
-        </div>
+        <div class="dd-summary"><span class="title">Industry</span><span class="sel muted" data-sel></span><span class="car">▾</span></div>
         <div class="dd-body">
           {% for val in industries %}
           <div class="opt {% if val in selected.industry %}selected{% endif %}" data-name="industry" data-value="{{ val }}">
@@ -203,13 +155,8 @@
           {% endfor %}
         </div>
       </div>
-      <!-- Section -->
       <div class="dd" data-dd>
-        <div class="dd-summary">
-          <span class="title">Section</span>
-          <span class="sel muted" data-sel></span>
-          <span class="car">▾</span>
-        </div>
+        <div class="dd-summary"><span class="title">Section</span><span class="sel muted" data-sel></span><span class="car">▾</span></div>
         <div class="dd-body">
           {% for val in sections %}
           <div class="opt {% if val in selected.section %}selected{% endif %}" data-name="section" data-value="{{ val }}">
@@ -219,13 +166,8 @@
           {% endfor %}
         </div>
       </div>
-      <!-- Rules -->
       <div class="dd" data-dd>
-        <div class="dd-summary">
-          <span class="title">Rules</span>
-          <span class="sel muted" data-sel></span>
-          <span class="car">▾</span>
-        </div>
+        <div class="dd-summary"><span class="title">Rules</span><span class="sel muted" data-sel></span><span class="car">▾</span></div>
         <div class="dd-body">
           {% for val in rules %}
           <div class="opt {% if val in selected.rule %}selected{% endif %}" data-name="rule" data-value="{{ val }}">
@@ -237,15 +179,9 @@
       </div>
     </div>
 
-    <!-- ROW 2: SUBJECT, PARTY -->
     <div class="grid-2" style="margin-top:12px;">
-      <!-- Subject -->
       <div class="dd" data-dd>
-        <div class="dd-summary">
-          <span class="title">Subject</span>
-          <span class="sel muted" data-sel></span>
-          <span class="car">▾</span>
-        </div>
+        <div class="dd-summary"><span class="title">Subject</span><span class="sel muted" data-sel></span><span class="car">▾</span></div>
         <div class="dd-body" id="subjectOptions">
           <input class="search-in-filter" type="text" placeholder="Search subjects…" oninput="filterSubject(this.value)">
           {% for s1, s2list in subjects.items() %}
@@ -265,13 +201,8 @@
         </div>
       </div>
 
-      <!-- Name of the Party -->
       <div class="dd" data-dd>
-        <div class="dd-summary">
-          <span class="title">Name of the Party</span>
-          <span class="sel muted" data-sel></span>
-          <span class="car">▾</span>
-        </div>
+        <div class="dd-summary"><span class="title">Name of the Party</span><span class="sel muted" data-sel></span><span class="car">▾</span></div>
         <div class="dd-body" id="partyOptions">
           <input class="search-in-filter" type="text" placeholder="Search parties…" oninput="filterParty(this.value)">
           {% for val in parties %}
@@ -284,11 +215,10 @@
       </div>
     </div>
 
-    <!-- Buttons for Filters (inside the wrapper) -->
     <div class="searchline">
       <button class="btn btn-orange" type="submit" id="filterSearchBtn">Search</button>
       <a class="btn btn-black" href="{{ url_for('home') }}">Reset</a>
-      <!-- NEW: Summarize button -->
+      <!-- Summarize button -->
       <button class="btn btn-orange" type="button" id="summarizeBtn" title="Summarize current results">AI summary of the results</button>
     </div>
   </form>
@@ -300,7 +230,7 @@
   </div>
 </div>
 
-<!-- LIGHT GREY BACKGROUND WRAPPER FOR AI SEARCH -->
+<!-- AI SEARCH -->
 <div class="ai-search-wrap">
   <div class="section-heading">Search with AI</div>
   <form method="get" id="aiSearchForm">
@@ -334,7 +264,7 @@
   </div>
   {% endif %}
 
-  <!-- NEW: Summary box placeholder (shown when you click Summarize) -->
+  <!-- Summary box (appears on click) -->
   <div class="ai-response" id="summaryBox" style="display:none;">
     <h3>Summary of key cases</h3>
     <div class="ai-text" id="summaryText"></div>
@@ -343,28 +273,19 @@
   {% if results %}
   <div style="margin-top:10px;" class="muted" id="totalCount" data-total="{{ total }}">{{ total }} result{{ '' if total==1 else 's' }}</div>
 
-  <!-- SUB-FILTERS BAR (Type of Court / State / Year) -->
   <div class="refine" id="refineBar">
     <b>Refine Results:</b>
-    <select id="refCourt">
-      <option value="">All Courts</option>
-    </select>
-    <select id="refState">
-      <option value="">All States</option>
-    </select>
-    <select id="refYear">
-      <option value="">All Years</option>
-    </select>
+    <select id="refCourt"><option value="">All Courts</option></select>
+    <select id="refState"><option value="">All States</option></select>
+    <select id="refYear"><option value="">All Years</option></select>
     <button class="btn btn-orange" id="resetRefineBtn">Reset Refine</button>
   </div>
 
-  <!-- data-pages & data-cur assist client in aggregating full result-set -->
   <div class="results" id="results"
        data-q="{{ q|e }}"
        data-pages="{{ pages }}"
        data-cur="{{ page }}">
     {% for r in results %}
-      {# ---- Try to read court/state directly (keys can vary) ---- #}
       {% set _court = '' %}
       {% for k,v in r.items() %}
         {% set lk = (k|string).strip().lower() %}
@@ -380,7 +301,6 @@
         {% endif %}
       {% endfor %}
 
-      {# ---- Existing fields ---- #}
       {% set _year  = r.get('year') or ((r.get('date') or r.get('Date') or r.get('date_of_decision') or r.get('Date of Decision') or '') | string)[:4] %}
       {% set _case  = r.get('case_law_number') or r.get('Case No.') or r.get('case_no') or '' %}
       {% set _party = r.get('name_of_party') or r.get('Party') or r.get('party') or '' %}
@@ -388,15 +308,11 @@
       {% set _hn    = r.get('summary_head_note') or r.get('head_notes') or r.get('Head Notes') or r.get('summary_full') or '' %}
       {% set _rid   = r.get('id') or r.get('ID') or r.get('rid') %}
 
-      {# ---- Pull possible Sections / Rules / Notifications / Circulars from various column names ---- #}
       {% set _sections_str = (r.get('sections') or r.get('Sections') or r.get('section') or r.get('Section') or r.get('section(s)') or '') | string %}
       {% set _rules_str    = (r.get('rules') or r.get('Rules') or r.get('rule') or r.get('Rule') or '') | string %}
       {% set _notif_str    = (r.get('notification') or r.get('Notification') or r.get('notifications') or r.get('Notifications') or r.get('notification_no') or r.get('Notification No.') or r.get('notification_number') or '') | string %}
       {% set _circ_str     = (r.get('circular') or r.get('Circular') or r.get('circulars') or r.get('Circulars') or r.get('circular_no') or r.get('Circular No.') or '') | string %}
 
-      {# ======================================================================
-         FALLBACKS from Case No. to guess court/state (only for refine, not search)
-      ====================================================================== #}
       {% if (not _court) or (not _state) %}
         {% set _case_up = (_case|string).upper().strip() %}
         {% set _seg = (_case_up.rsplit('-', 1)[-1] if '-' in _case_up else _case_up) | trim %}
@@ -560,7 +476,6 @@
     }
   });
 
-  // --- Option selection ---
   function updateSummary(dd){
     const selSpan = dd.querySelector('[data-sel]');
     if (!selSpan) return;
@@ -582,7 +497,6 @@
   });
   document.querySelectorAll('[data-dd]').forEach(updateSummary);
 
-  // --- Subject & Party filter quick-search ---
   function filterSubject(q){
     q = (q||'').toLowerCase().trim();
     const groups = document.querySelectorAll('#subjectOptions .subject-group');
@@ -611,7 +525,7 @@
     });
   }
 
-  // --- Loading overlay on search submit ---
+  // Loading overlay
   const filterForm = document.getElementById('filtersForm');
   const aiForm = document.getElementById('aiSearchForm');
   const loading = document.getElementById('loading');
@@ -631,7 +545,6 @@
     });
   }
 
-  // ===== Helpers =====
   function setCountLabel(n){
     const lbl = document.getElementById('totalCount');
     if (!lbl) return;
@@ -666,7 +579,6 @@
 
   // ======= Ensure AI search shows DB case laws; then refine/highlight/paginate; then synthesize AI paragraph =======
   (async function(){
-    // If AI query present but no result cards rendered by server, fetch DB results using q=<ai_q>
     async function ensureResultsPresent(){
       const aiMeta = document.getElementById('aiMeta');
       const aiQuery = (aiMeta?.dataset.aiq || '').trim();
@@ -714,10 +626,9 @@
     const totalPages = parseInt(resultsEl.getAttribute('data-pages') || '1', 10) || 1;
     const curPage = parseInt(resultsEl.getAttribute('data-cur') || '1', 10) || 1;
 
-    // Start with cards from the current page
     let allCards = Array.from(resultsEl.querySelectorAll('.result')).map(n => n.cloneNode(true));
 
-    // Fetch remaining pages and merge (so refine/search is across entire server result)
+    // Pull all pages so refine operates on the full set
     if (totalPages > 1){
       if (loading) loading.style.display = 'flex';
       const base = new URL(window.location.href);
@@ -747,28 +658,11 @@
       return true;
     });
 
-    // Enforce FULL-PHRASE filter ONLY within allowed fields
-    function cardMatchesPhrase(card, phrase){
-      if (!phrase) return true;
-      const p = phrase.toLowerCase();
-      const selectors = ['.hl-case','.hl-party','.hl-date','.hl-court','.hl-state','.hl-headnotes',
-                         '.hl-sections','.hl-rules','.hl-notif','.hl-circ'];
-      for (const sel of selectors){
-        const el = card.querySelector(sel);
-        if (!el) continue;
-        const txt = (el.textContent || '').toLowerCase();
-        if (txt.indexOf(p) !== -1) return true;
-      }
-      return false;
-    }
-
-    // BASELINE = all cards from server, then narrowed by the phrase requirement
+    // IMPORTANT FIX: do NOT filter away server results by the full phrase.
+    // Keep all results, only use qPhrase for highlighting.
     let baseline = allCards;
-    if (qPhrase){
-      baseline = baseline.filter(card => cardMatchesPhrase(card, qPhrase));
-    }
 
-    // Build refine dropdowns from FULL (already phrase-filtered) baseline
+    // Build refine dropdowns from baseline
     const courtSel = document.getElementById('refCourt');
     const stateSel = document.getElementById('refState');
     const yearSel  = document.getElementById('refYear');
@@ -789,19 +683,16 @@
       arr.forEach(v => sel.add(new Option(v, v)));
     }
 
-    /* Restore population of All Courts / All States / All Years */
     fillSelect(courtSel, uniqFrom('data-court'));
     fillSelect(stateSel, uniqFrom('data-state'));
     fillSelect(yearSel,  uniqFrom('data-year'), true);
 
-    // Working set after refine
     let working = baseline.slice();
 
-    // Client pagination: ALWAYS 10 per page
+    // Client pagination: 10 per page
     const PER_PAGE = 10;
     let clientPage = 1;
 
-    // Replace server pagination with client one
     const serverPagi = document.getElementById('serverPagi');
     const clientPagi = document.createElement('div');
     clientPagi.className = 'pagi';
@@ -838,7 +729,6 @@
       if (serverPagi) serverPagi.style.display = 'none';
       renderPagi();
       if (!clientPagi.parentNode) resultsEl.insertAdjacentElement('afterend', clientPagi);
-      // After rendering, update the AI synthesis so it reflects the current (refined) working set
       synthesizeFrom(working);
     }
 
@@ -874,14 +764,10 @@
       });
     }
 
-    // ===== AI synthesis: include Sections / Rules / Notifications / Circulars =====
-    function splitTokens(s){
-      if (!s) return [];
-      return s.split(/[,;/|]+/).map(x=>x.trim()).filter(Boolean);
-    }
+    // AI synthesis (simple metadata rollup)
+    function splitTokens(s){ if (!s) return []; return s.split(/[,;/|]+/).map(x=>x.trim()).filter(Boolean); }
     function uniq(arr){
-      const s = new Set();
-      const out = [];
+      const s = new Set(); const out = [];
       arr.forEach(v => { const k=v.toLowerCase(); if (!s.has(k)){ s.add(k); out.push(v); } });
       return out;
     }
@@ -891,14 +777,7 @@
       const aiMeta = document.getElementById('aiMeta');
       const aiQuery = (aiMeta?.dataset.aiq || '').trim();
 
-      const sections = [];
-      const rules = [];
-      const notifs = [];
-      const circs = [];
-      const courts = [];
-      const states = [];
-      const years = [];
-
+      const sections = [], rules = [], notifs = [], circs = [], courts = [], states = [], years = [];
       cards.forEach(card=>{
         splitTokens(card.getAttribute('data-sections')||'').forEach(t=>sections.push(t));
         splitTokens(card.getAttribute('data-rules')||'').forEach(t=>rules.push(t));
@@ -926,25 +805,21 @@
       if (Ct) parts.push(`Courts seen: ${Ct}.`);
       if (St) parts.push(`States seen: ${St}.`);
       if (Y)  parts.push(`Years covered: ${Y}.`);
-
       aiS.textContent = parts.join(' ');
     }
 
     // First paint
-    working = baseline.slice();
     renderPage();
   })();
 
-  // ===== NEW: Summarize Results (calls /summarize_results) =====
+  // ===== Summarize Results =====
   const summarizeBtn = document.getElementById('summarizeBtn');
   if (summarizeBtn) {
     summarizeBtn.addEventListener('click', async function(){
       try {
         summarizeBtn.disabled = true;
-        const loading = document.getElementById('loading');
         if (loading) loading.style.display = 'flex';
 
-        // Use current query string so summary matches the shown results (filters/AI)
         const url = new URL(window.location.origin + "/summarize_results" + window.location.search);
         const res = await fetch(url.toString(), { method: 'GET' });
         const data = await res.json();
@@ -961,7 +836,6 @@
           box.style.display = '';
         }
 
-        // Keep the summary above results
         const anchor = document.getElementById('refineBar') || document.getElementById('totalCount') || document.querySelector('.results') || document.querySelector('.ai-search-wrap');
         if (anchor && box.previousElementSibling !== anchor) {
           anchor.insertAdjacentElement('beforebegin', box);
@@ -975,7 +849,6 @@
           box.style.display = '';
         }
       } finally {
-        const loading = document.getElementById('loading');
         if (loading) loading.style.display = 'none';
         summarizeBtn.disabled = false;
       }
@@ -983,5 +856,3 @@
   }
 </script>
 {% endblock %}
-
-
