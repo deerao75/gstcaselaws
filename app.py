@@ -69,16 +69,22 @@ ENGINE = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=CONNECT_AR
 metadata = MetaData()
 Acer = Table(TABLE_NAME, metadata, autoload_with=ENGINE)
 
+# ======================= COLUMN SETS =======================
 ALL_COLS = [
     "id","case_law_number","name_of_party","state","year","type_of_court",
     "industry_sector","subject_matter1","subject_matter2","section","rule",
     "case_name","date","basic_detail","summary_head_note","citation",
     "question_answered","full_case_law",
 ]
+
+# Broadened search surface (strings only; avoid numeric/date types like year/date)
 SEARCHABLE_COLS = [
     "case_law_number","name_of_party","case_name","state",
     "section","rule","citation","industry_sector",
-    "summary_head_note"  # add "full_case_law" if needed (slower)
+    "subject_matter1","subject_matter2",
+    "basic_detail","question_answered",
+    "summary_head_note",#"full_case_law",#   # include full text for recall
+    "type_of_court"
 ]
 
 # ======================= OPENAI CONFIG =======================
@@ -87,7 +93,7 @@ _env_model = (os.getenv("OPENAI_MODEL") or "").strip()
 _ALLOWED = {"gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"}
 OPENAI_MODEL = _env_model if _env_model in _ALLOWED else "gpt-4o-mini"
 
-def _openai_chat(messages, max_tokens=800, temperature=0.4):
+def _openai_chat(messages, max_tokens=800, temperature=0.35):
     if not OPENAI_API_KEY:
         raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
     try:
@@ -167,10 +173,12 @@ def _meta_cache_set(name: str, value, ttl_sec: int = 300):
 
 # ======================= SEARCH HELPERS =======================
 def like_filters(q: str):
+    """OR across SEARCHABLE_COLS using LIKE (case-insensitive)."""
+    ql = q.lower()
     terms = []
     for col in SEARCHABLE_COLS:
         if hasattr(Acer.c, col):
-            terms.append(func.lower(getattr(Acer.c, col)).like(f"%{q.lower()}%"))
+            terms.append(func.lower(getattr(Acer.c, col)).like(f"%{ql}%"))
     return or_(*terms) if terms else text("1=1")
 
 _STOPWORDS = {
@@ -214,6 +222,7 @@ def _nlq_clause(query: str):
     toks = _nlq_keywords(query)
     if not toks:
         return like_filters(query)
+    # AND across tokens; each token is OR across columns
     return and_(*[like_filters(t) for t in toks])
 
 def _merge_ai_and_user_keywords(ai_text: str, user_query: str) -> str:
@@ -333,7 +342,7 @@ def get_ai_explanation(prompt_text):
     full_prompt = (
         "You are an expert on Indian GST laws. Write a detailed, context-focused explanation in 2–4 compact paragraphs. "
         "Stay tightly aligned to the user's query and the provided filter context; do not drift. "
-        "Where appropriate, mention relevant statutory anchors (CGST/IGST sections, rules, notifications/circulars) and common interpretational issues. "
+        "Mention relevant statutory anchors (CGST/IGST sections, rules, notifications/circulars) as applicable. "
         "Avoid generic wrap-ups or bullet points. Plain paragraphs only.\n\n"
         f"Filter Context: {filter_context}\n"
         f"User Query: {(prompt_text or '').strip()}\n"
@@ -395,6 +404,7 @@ def home():
             ).mappings().all()
         return _total, [dict(r) for r in _rows]
 
+    # ---------- AI search ----------
     if is_ai_search and ai_q:
         ai_response_data = get_ai_explanation(ai_q)
         ai_text = ai_response_data.get('text', '') if isinstance(ai_response_data, dict) else ''
@@ -425,22 +435,35 @@ def home():
         pages = (total // per_page) + (1 if total % per_page else 0)
         q_display = ai_q  # ensures results block renders even in AI mode
 
+    # ---------- Standard search (with fallback NLQ -> LIKE) ----------
     elif q_raw or any([sel_industries, sel_sections, sel_rules, sel_parties, sel_s1, sel_s2]):
-        clauses = []
-        if sel_industries: clauses.append(Acer.c.industry_sector.in_(sel_industries))
-        if sel_sections:   clauses.append(Acer.c.section.in_(sel_sections))
-        if sel_rules:      clauses.append(Acer.c.rule.in_(sel_rules))
-        if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
-        if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
-        if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-        if q_raw:          clauses.append(_nlq_clause(q_raw))
-        where_expr = and_(*clauses) if clauses else text("1=1")
-        total, results = _run_expr(where_expr)
+        base_filters = []
+        if sel_industries: base_filters.append(Acer.c.industry_sector.in_(sel_industries))
+        if sel_sections:   base_filters.append(Acer.c.section.in_(sel_sections))
+        if sel_rules:      base_filters.append(Acer.c.rule.in_(sel_rules))
+        if sel_parties:    base_filters.append(Acer.c.name_of_party.in_(sel_parties))
+        if sel_s1:         base_filters.append(Acer.c.subject_matter1.in_(sel_s1))
+        if sel_s2:         base_filters.append(Acer.c.subject_matter2.in_(sel_s2))
+
+        if q_raw:
+            # First: NLQ
+            where_expr = and_(*(base_filters + [ _nlq_clause(q_raw) ])) if base_filters else _nlq_clause(q_raw)
+            total, results = _run_expr(where_expr)
+
+            # Fallback: plain LIKE if NLQ found 0
+            if total == 0:
+                where_expr = and_(*(base_filters + [ like_filters(q_raw) ])) if base_filters else like_filters(q_raw)
+                total, results = _run_expr(where_expr)
+        else:
+            where_expr = and_(*base_filters) if base_filters else text("1=1")
+            total, results = _run_expr(where_expr)
+
         pages = (total // per_page) + (1 if total % per_page else 0)
         q_display = q_raw
     else:
         q_display = ""
 
+    # Pagination links
     def page_url(n):
         params = {
             'industry': sel_industries, 'section': sel_sections, 'rule': sel_rules,
@@ -691,6 +714,7 @@ def admin_new_case():
     empty["id"] = ""
     return render_template("admin_edit.html", r=empty, mode="new")
 
+# ---- EXPORT CSV (primary) ----
 @app.get("/admin/export_csv")
 def admin_export_csv():
     cols = [getattr(Acer.c, c) for c in ALL_COLS if hasattr(Acer.c, c)]
@@ -701,6 +725,12 @@ def admin_export_csv():
     df.to_csv(buf, index=False, encoding="utf-8-sig")
     buf.seek(0)
     return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="cases.csv")
+
+# ---- Aliases so "Bulk Download" buttons never 404 ----
+@app.get("/admin/bulk_download")
+@app.get("/admin/download")
+def admin_bulk_download():
+    return admin_export_csv()
 
 @app.route("/admin/delete/<int:rid>", methods=["POST"])
 def admin_delete_case(rid):
@@ -715,7 +745,6 @@ _TEMPLATE_COLUMNS = [
     "case_name","date","basic_detail","summary_head_note","citation",
     "question_answered","full_case_law"
 ]
-# simple synonym map (lowercased simplified -> canonical)
 _SYNONYMS = {
     "case lawnumber":"case_law_number","case law number":"case_law_number","caselaw number":"case_law_number",
     "party":"name_of_party","name of party":"name_of_party",
@@ -738,10 +767,8 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         if sc in _SYNONYMS: rename[c] = _SYNONYMS[sc]
         elif sc in _TEMPLATE_COLUMNS: rename[c] = sc
         else:
-            # try exact canonical if original equals
             if c in _TEMPLATE_COLUMNS: rename[c] = c
     df = df.rename(columns=rename)
-    # keep only known columns (excluding id)
     keep = [c for c in _TEMPLATE_COLUMNS if c in df.columns]
     return df[keep].copy()
 
@@ -758,10 +785,8 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
             except Exception:
                 return None
         df["year"] = df["year"].map(_to_year)
-        # try to backfill from date
         if "date" in df.columns:
             df["year"] = df["year"].fillna(df["date"].dt.year)
-    # strip strings
     for c in df.columns:
         if df[c].dtype == object:
             df[c] = df[c].map(lambda x: (str(x).strip() if x is not None else None))
@@ -775,18 +800,24 @@ def admin_bulk_template():
     buf.seek(0)
     return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="bulk_upload_template.csv")
 
+# alias for older templates pointing to /admin/bulk_template
+@app.get("/admin/bulk_template")
+def admin_bulk_template_alias():
+    return admin_bulk_template()
+
 @app.route("/admin/bulk_upload", methods=["GET","POST"])
 def admin_bulk_upload():
     if request.method == "GET":
-        # If you already have admin_bulk_upload.html, this render will use it.
-        # If not, we serve a minimal inline form so the route still works.
         try:
             return render_template("admin_bulk_upload.html")
         except Exception:
             html = """
             <h2>Bulk Upload Case Laws (Excel/CSV)</h2>
-            <p>Accepted: .xlsx, .xls, .csv &nbsp;|&nbsp;
-               <a href="{{ url_for('admin_bulk_template') }}">Download CSV template</a></p>
+            <p>Accepted: .xlsx, .xls, .csv</p>
+            <p>
+              <a href="{{ url_for('admin_bulk_template') }}">Download Upload Template</a> |
+              <a href="{{ url_for('admin_bulk_download') }}">Bulk Download All Cases</a>
+            </p>
             <form method="post" enctype="multipart/form-data">
               <input type="file" name="file" required>
               <button type="submit">Upload</button>
@@ -795,7 +826,6 @@ def admin_bulk_upload():
             """
             return render_template_string(html)
 
-    # POST
     f = request.files.get("file")
     if not f or not getattr(f, "filename", ""):
         flash("No file selected.", "err")
@@ -826,11 +856,9 @@ def admin_bulk_upload():
         return redirect(url_for("admin_bulk_upload"))
 
     df = _coerce_types(df)
-    # limit to avoid accidental huge uploads
     if len(df) > 5000:
         df = df.iloc[:5000, :]
 
-    # Prepare rows dicts (exclude None-only rows)
     records = []
     for _, row in df.iterrows():
         rec = {}
@@ -846,16 +874,14 @@ def admin_bulk_upload():
         flash("No valid rows to insert.", "err")
         return redirect(url_for("admin_bulk_upload"))
 
-    inserted = 0
     try:
         with ENGINE.begin() as conn:
             conn.execute(insert(Acer), records)
-            inserted = len(records)
     except Exception as e:
         flash(f"Insert failed: {e}", "err")
         return redirect(url_for("admin_bulk_upload"))
 
-    flash(f"Uploaded and inserted {inserted} row(s).", "ok")
+    flash(f"Uploaded and inserted {len(records)} row(s).", "ok")
     return redirect(url_for("admin_caselaws"))
 
 # ======================= Contact =======================
@@ -873,7 +899,7 @@ def contact():
         return redirect(url_for("contact"))
     return render_template("contact.html", team=team)
 
-# ======================= Meta & Subjects helpers (after routes use) =======================
+# ======================= Meta & Subjects helpers =======================
 def _distinct(colname):
     ck = f"distinct:{colname}"
     hit = _meta_cache_get(ck)
