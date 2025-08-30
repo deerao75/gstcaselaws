@@ -1,16 +1,19 @@
 from flask import Flask, request, render_template, abort, redirect, url_for, flash, send_file, jsonify, render_template_string
 from sqlalchemy import create_engine, MetaData, Table, select, or_, func, text, and_, insert, update, delete
 from bs4 import BeautifulSoup
+from werkzeug.utils import secure_filename
 import os, re, io, ssl, json, time, hashlib
 import pandas as pd
 from collections import defaultdict
 from datetime import date, datetime
 
-# ======================= DB CONFIG =======================
-# (Render/TiDB-safe: no hardcoded Windows CA path; supports Secret Files)
+# ======================= FLASK & UPLOAD CONFIG =======================
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32MB upload cap
+ALLOWED_UPLOADS = {".xlsx", ".xls", ".csv"}
 
+# ======================= DB CONFIG =======================
 DB_USER = os.getenv("TIDB_USER") or os.getenv("MYSQL_USER", "root")
 DB_PASSWORD = os.getenv("TIDB_PASSWORD") or os.getenv("MYSQL_PASSWORD", "592230")
 DB_HOST = os.getenv("TIDB_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
@@ -25,7 +28,6 @@ DATABASE_URL = (
 
 CONNECT_ARGS = {}
 
-# Optional override (0/1/true/false). If not set, infer from port/host.
 DB_USE_TLS = os.getenv("DB_USE_TLS")
 if DB_USE_TLS is not None:
     use_tls = DB_USE_TLS.strip().lower() in ("1", "true", "yes")
@@ -33,13 +35,11 @@ else:
     use_tls = (DB_PORT == "4000") or ("tidbcloud.com" in (DB_HOST or "").lower())
 
 if use_tls:
-    # Show what's actually mounted in /etc/secrets (Render mounts Secret Files here)
     try:
         print("[TLS] /etc/secrets contents:", os.listdir("/etc/secrets"))
     except Exception as _e:
         print("[TLS] Could not list /etc/secrets:", _e)
 
-    # Candidate CA paths (env + common filenames)
     env_ca = (os.getenv("TIDB_SSL_CA") or "").strip()
     candidates = [p for p in [env_ca,
                               "/etc/secrets/TIDB_SSL_CA",
@@ -47,20 +47,17 @@ if use_tls:
                               "/etc/secrets/ca.pem",
                               "/etc/ssl/certs/isrgrootx1.pem",
                               "/etc/ssl/certs/ca-certificates.crt"] if p]
-
     ssl_ca_path = next((p for p in candidates if os.path.isfile(p)), None)
 
     if ssl_ca_path:
         CONNECT_ARGS = {"ssl": {"ca": ssl_ca_path}}
         print(f"[DB] TLS enabled with CA: {ssl_ca_path}")
     else:
-        # Fall back to system CAs; many managed DBs are signed by public roots.
         try:
             ctx = ssl.create_default_context()
             CONNECT_ARGS = {"ssl": ctx}
             print("[DB] TLS enabled with system CA bundle (no explicit CA file found).")
         except Exception as e:
-            # Last resort: error out with helpful message
             raise RuntimeError(
                 "TLS required but no CA file found and system bundle failed. "
                 "Set env TIDB_SSL_CA to /etc/secrets/<your-secret-file> or add a Secret File."
@@ -68,7 +65,6 @@ if use_tls:
 else:
     print("[DB] TLS not required (DB_USE_TLS=0 or non-TiDB settings).")
 
-from sqlalchemy import create_engine
 ENGINE = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=CONNECT_ARGS)
 metadata = MetaData()
 Acer = Table(TABLE_NAME, metadata, autoload_with=ENGINE)
@@ -82,7 +78,7 @@ ALL_COLS = [
 SEARCHABLE_COLS = [
     "case_law_number","name_of_party","case_name","state",
     "section","rule","citation","industry_sector",
-    "summary_head_note"#,"full_case_law"#
+    "summary_head_note"  # add "full_case_law" if needed (slower)
 ]
 
 # ======================= OPENAI CONFIG =======================
@@ -92,73 +88,49 @@ _ALLOWED = {"gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"}
 OPENAI_MODEL = _env_model if _env_model in _ALLOWED else "gpt-4o-mini"
 
 def _openai_chat(messages, max_tokens=800, temperature=0.4):
-    """
-    Version-compatible OpenAI chat call:
-    - Try new client (`from openai import OpenAI`) first
-    - Fall back to legacy `openai.ChatCompletion.create`
-    Raises Exception with clear text so caller can show it to the user.
-    """
     if not OPENAI_API_KEY:
         raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
-
     try:
-        # New SDK (openai>=1.0)
         from openai import OpenAI  # type: ignore
         client = OpenAI(api_key=OPENAI_API_KEY)
         resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
+            model=OPENAI_MODEL, messages=messages,
+            max_tokens=max_tokens, temperature=temperature,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e_new:
         try:
-            # Legacy SDK
             import openai  # type: ignore
             openai.api_key = OPENAI_API_KEY
             resp = openai.ChatCompletion.create(
-                model=OPENAI_MODEL,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
+                model=OPENAI_MODEL, messages=messages,
+                max_tokens=max_tokens, temperature=temperature,
             )
             return (resp["choices"][0]["message"]["content"] or "").strip()
         except Exception as e_old:
             raise RuntimeError(f"OpenAI call failed: {e_old or e_new}")
 
 def _openai_chat_json(messages, model=None, max_tokens=900, temperature=0.3):
-    """
-    JSON-mode helper for Chat Completions.
-    Returns a dict. Falls back to legacy SDK and tries to parse JSON.
-    """
     if not OPENAI_API_KEY:
         raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
     model = model or OPENAI_MODEL or "gpt-4o-mini"
-
-    # New SDK path
     try:
         from openai import OpenAI  # type: ignore
         client = OpenAI(api_key=OPENAI_API_KEY)
         resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
+            model=model, messages=messages,
             response_format={"type": "json_object"},
-            max_tokens=max_tokens,
-            temperature=temperature,
+            max_tokens=max_tokens, temperature=temperature,
         )
         content = resp.choices[0].message.content or "{}"
         return json.loads(content)
     except Exception:
-        # Legacy fallback: instruct JSON and parse
         import openai  # type: ignore
         openai.api_key = OPENAI_API_KEY
         _msgs = messages + [{"role": "system", "content": "Return a single JSON object as your entire reply."}]
         resp = openai.ChatCompletion.create(
-            model=model,
-            messages=_msgs,
-            max_tokens=max_tokens,
-            temperature=temperature,
+            model=model, messages=_msgs,
+            max_tokens=max_tokens, temperature=temperature,
         )
         raw = resp["choices"][0]["message"]["content"] or "{}"
         try:
@@ -167,9 +139,9 @@ def _openai_chat_json(messages, model=None, max_tokens=900, temperature=0.3):
             m = re.search(r"\{.*\}", raw, flags=re.S)
             return json.loads(m.group(0)) if m else {}
 
-# ======================= RUNTIME CACHES (speed-ups) =======================
-_AI_CACHE = {}     # { key: {"value": str, "exp": epoch_seconds} }
-_META_CACHE = {}   # { name: {"value": any, "exp": epoch_seconds} }
+# ======================= RUNTIME CACHES =======================
+_AI_CACHE = {}
+_META_CACHE = {}
 
 def _ai_cache_get(key: str):
     e = _AI_CACHE.get(key)
@@ -193,7 +165,7 @@ def _meta_cache_get(name: str):
 def _meta_cache_set(name: str, value, ttl_sec: int = 300):
     _META_CACHE[name] = {"value": value, "exp": time.time() + ttl_sec}
 
-# ======================= HELPERS =======================
+# ======================= SEARCH HELPERS =======================
 def like_filters(q: str):
     terms = []
     for col in SEARCHABLE_COLS:
@@ -201,7 +173,6 @@ def like_filters(q: str):
             terms.append(func.lower(getattr(Acer.c, col)).like(f"%{q.lower()}%"))
     return or_(*terms) if terms else text("1=1")
 
-# ---- Natural Language Query helpers ----
 _STOPWORDS = {
     "a","an","the","this","that","these","those","me","we","us","you","your","yours",
     "give","show","find","get","provide","list","tell","display","search","look","fetch",
@@ -218,94 +189,42 @@ _DOMAIN_PHRASES = [
 ]
 
 def _nlq_keywords(q: str):
-    """
-    Extract meaningful keywords/phrases from a natural-language query.
-    - lowers, removes punctuation (keeps hyphens), strips stopwords
-    - preserves domain phrases as single tokens if present
-    - returns deduped list in the original order of appearance
-    """
     if not q: return []
     s = q.lower()
-    # soft normalize punctuation (keep hyphen so 'e-way' works)
     s = re.sub(r"[^\w\s\-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
-
-    kept = []
-    seen = set()
-
-    # detect domain phrases first (longest wins)
+    kept, seen = [], set()
     s_for_phrase = " " + s + " "
     for ph in sorted(_DOMAIN_PHRASES, key=len, reverse=True):
         ph_norm = " " + ph + " "
         if ph_norm in s_for_phrase:
             if ph not in seen:
-                kept.append(ph)
-                seen.add(ph)
-            # remove the phrase so its words don't reappear as singles
+                kept.append(ph); seen.add(ph)
             s_for_phrase = s_for_phrase.replace(ph_norm, " ")
-    # residual singles
     residual = re.sub(r"\s+", " ", s_for_phrase).strip()
     if residual:
         for tok in residual.split():
-            if tok in _STOPWORDS:
-                continue
-            if len(tok) <= 2 and tok not in _KEEP_SHORT:
-                continue
+            if tok in _STOPWORDS: continue
+            if len(tok) <= 2 and tok not in _KEEP_SHORT: continue
             if tok not in seen:
                 kept.append(tok); seen.add(tok)
-
     return kept
 
 def _nlq_clause(query: str):
-    """
-    Build a SQLAlchemy clause that supports natural language:
-    AND over tokens, where each token is ORed over SEARCHABLE_COLS.
-    Fallback to simple like_filters if tokenization yields nothing.
-    """
     toks = _nlq_keywords(query)
     if not toks:
         return like_filters(query)
     return and_(*[like_filters(t) for t in toks])
 
-def _distinct(colname):
-    # 5-minute cache to avoid repeated DB hits for dropdowns
-    ck = f"distinct:{colname}"
-    hit = _meta_cache_get(ck)
-    if hit is not None:
-        return hit
-    with ENGINE.connect() as conn:
-        rows = conn.execute(
-            select(getattr(Acer.c, colname)).where(
-                getattr(Acer.c, colname).isnot(None),
-                getattr(Acer.c, colname) != ""
-            ).distinct().order_by(getattr(Acer.c, colname).asc())
-        ).scalars().all()
-    vals = [r for r in rows if r not in (None, "")]
-    _meta_cache_set(ck, vals, ttl_sec=300)
-    return vals
+def _merge_ai_and_user_keywords(ai_text: str, user_query: str) -> str:
+    ai_tokens = _nlq_keywords(ai_text or "")
+    ai_compact = " ".join(ai_tokens) if ai_tokens else ""
+    user_query = (user_query or "").strip()
+    if ai_compact and user_query:
+        return f"{ai_compact} {user_query}"
+    return ai_compact or user_query
 
-def _subjects_grouped():
-    # 5-minute cache for subjects tree
-    ck = "subjects"
-    hit = _meta_cache_get(ck)
-    if hit is not None:
-        return hit
-    with ENGINE.connect() as conn:
-        rows = conn.execute(
-            select(Acer.c.subject_matter1, Acer.c.subject_matter2)
-            .where(Acer.c.subject_matter1.isnot(None), Acer.c.subject_matter1 != "")
-        ).all()
-    d = defaultdict(set)
-    for s1, s2 in rows:
-        k = (s1 or "").strip()
-        v = (s2 or "").strip()
-        if k:
-            if v: d[k].add(v)
-            else: d[k] = d[k]
-    out = {k: sorted(v) for k, v in sorted(d.items(), key=lambda kv: kv[0].lower())}
-    _meta_cache_set(ck, out, ttl_sec=300)
-    return out
-
+# ======================= TEXT CLEANERS =======================
 def _strip_all_html(html: str) -> str:
     if not html:
         return ""
@@ -355,9 +274,8 @@ def _split_points(text_block: str):
             return items
     return [ln.strip() for ln in re.split(r"\n{2,}|-\s+", txt) if ln.strip()]
 
-# --------- Formatting helpers for summarization ----------
+# --------- Summary helpers ----------
 def _selected_topic(args) -> str:
-    """Compute the main filter topic to guide the summary."""
     s1 = args.getlist("s1")
     s2 = args.getlist("s2")
     sections = args.getlist("section")
@@ -366,8 +284,6 @@ def _selected_topic(args) -> str:
     is_ai = args.get("ai_search") == "true"
     ai_q = (args.get("ai_q") or "").strip() if is_ai else ""
     q = (args.get("q") or "").strip()
-
-    # Priority: Subject-2 > Subject-1 > Section > Rule > Industry > ai_q > q
     if s2:   return ", ".join(s2)
     if s1:   return ", ".join(s1)
     if sections: return "Section(s): " + ", ".join(sections)
@@ -378,34 +294,22 @@ def _selected_topic(args) -> str:
     return "GST case law"
 
 def _clean_summary(text: str) -> str:
-    """Remove star/bullet markers; drop generic wrap-ups; normalize paragraphs."""
-    if not text:
-        return ""
-    # strip bullets/stars at line starts
+    if not text: return ""
     lines = []
     for ln in text.splitlines():
-        ln = re.sub(r'^\s*[\*\-•]+\s*', '', ln)          # *, -, •
-        ln = re.sub(r'^\s*\d+\.\s*', '', ln)             # numbered bullets
+        ln = re.sub(r'^\s*[\*\-•]+\s*', '', ln)
+        ln = re.sub(r'^\s*\d+\.\s*', '', ln)
         lines.append(ln)
     text = "\n".join(lines)
-
-    # Remove generic concluding lines
     text = re.sub(r'(?im)^\s*(overall|in summary|in conclusion|to conclude|in short)\b.*$', '', text)
-
-    # Collapse 3+ blank lines -> single blank line
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text
 
-# ======================= AI EXPLANATION (FASTER + CACHED) =======================
+# ======================= AI EXPLANATION (DETAILED + CACHED) =======================
 def get_ai_explanation(prompt_text):
-    """
-    Faster, cached AI step for 'Search with AI'.
-    - 1–2 short paragraphs + final 'Keywords:' line (5–10 comma-separated).
-    - Cached for 15 minutes per (query + selected filters).
-    """
     args = request.args
     key_src = "|".join([
-        "ai", (prompt_text or "").strip(),
+        "ai_explain_v2", (prompt_text or "").strip(),
         ",".join(sorted(args.getlist("industry"))),
         ",".join(sorted(args.getlist("section"))),
         ",".join(sorted(args.getlist("rule"))),
@@ -418,22 +322,31 @@ def get_ai_explanation(prompt_text):
     if cached is not None:
         return {"text": cached, "cached": True}
 
+    context_bits = []
+    if args.getlist("section"): context_bits.append("Sections: " + ", ".join(args.getlist("section")))
+    if args.getlist("rule"):    context_bits.append("Rules: " + ", ".join(args.getlist("rule")))
+    if args.getlist("industry"):context_bits.append("Industry: " + ", ".join(args.getlist("industry")))
+    if args.getlist("s1"):      context_bits.append("Subject-1: " + ", ".join(args.getlist("s1")))
+    if args.getlist("s2"):      context_bits.append("Subject-2: " + ", ".join(args.getlist("s2")))
+    filter_context = (" | ".join(context_bits)) if context_bits else "General GST"
+
     full_prompt = (
-        "You are an expert on Indian GST laws. In 1–2 short paragraphs, answer the query. "
-        "Then, on a final line that starts with 'Keywords:', list 5–10 search keywords "
-        "(comma-separated). Keep total under ~250 words.\n\n"
-        f"Query: {(prompt_text or '').strip()}"
+        "You are an expert on Indian GST laws. Write a detailed, context-focused explanation in 2–4 compact paragraphs. "
+        "Stay tightly aligned to the user's query and the provided filter context; do not drift. "
+        "Where appropriate, mention relevant statutory anchors (CGST/IGST sections, rules, notifications/circulars) and common interpretational issues. "
+        "Avoid generic wrap-ups or bullet points. Plain paragraphs only.\n\n"
+        f"Filter Context: {filter_context}\n"
+        f"User Query: {(prompt_text or '').strip()}\n"
     )
     try:
         text = _openai_chat(
             [
-                {"role": "system", "content": "You are a helpful assistant knowledgeable about Indian GST laws."},
+                {"role": "system", "content": "You are a precise Indian GST legal analyst. Be specific and grounded."},
                 {"role": "user", "content": full_prompt},
             ],
-            max_tokens=450,   # smaller = faster
-            temperature=0.3,
+            max_tokens=700, temperature=0.35,
         )
-        _ai_cache_set(cache_key, text, ttl_sec=900)  # 15 minutes
+        _ai_cache_set(cache_key, text, ttl_sec=900)
         return {"text": text}
     except Exception as e:
         print("AI explain error:", e)
@@ -457,11 +370,9 @@ def home():
     sel_parties    = request.args.getlist("party")
     sel_s1         = request.args.getlist("s1")
     sel_s2         = request.args.getlist("s2")
-    q              = (request.args.get("q") or "").strip()
+    q_raw          = (request.args.get("q") or "").strip()
 
-    results = []
-    total = 0
-    pages = 1
+    results, total, pages = [], 0, 1
     ai_response_data = None
 
     COMMON_COLS = [
@@ -472,17 +383,49 @@ def home():
         Acer.c.subject_matter1, Acer.c.subject_matter2,
     ]
 
-    # AI search
+    page = max(int(request.args.get("page", 1) or 1), 1)
+    per_page = 10
+    offset = (page - 1) * per_page
+
+    def _run_expr(expr):
+        with ENGINE.connect() as conn:
+            _total = conn.execute(select(func.count()).select_from(Acer).where(expr)).scalar_one()
+            _rows = conn.execute(
+                select(*COMMON_COLS).where(expr).order_by(Acer.c.id.desc()).limit(per_page).offset(offset)
+            ).mappings().all()
+        return _total, [dict(r) for r in _rows]
+
     if is_ai_search and ai_q:
         ai_response_data = get_ai_explanation(ai_q)
-        keywords_for_search = ai_q
-        if ai_response_data and 'text' in ai_response_data:
-            lines = ai_response_data['text'].splitlines()
-            if lines:
-                last = lines[-1]
-                if last.lower().startswith("keywords:"):
-                    keywords_for_search = last[9:].strip()
+        ai_text = ai_response_data.get('text', '') if isinstance(ai_response_data, dict) else ''
+        merged_search_text = _merge_ai_and_user_keywords(ai_text, ai_q)
 
+        base_filters = []
+        if sel_industries: base_filters.append(Acer.c.industry_sector.in_(sel_industries))
+        if sel_sections:   base_filters.append(Acer.c.section.in_(sel_sections))
+        if sel_rules:      base_filters.append(Acer.c.rule.in_(sel_rules))
+        if sel_parties:    base_filters.append(Acer.c.name_of_party.in_(sel_parties))
+        if sel_s1:         base_filters.append(Acer.c.subject_matter1.in_(sel_s1))
+        if sel_s2:         base_filters.append(Acer.c.subject_matter2.in_(sel_s2))
+
+        # Try 1: NLQ over (AI tokens + user query)
+        where_expr = and_(*(base_filters + [ _nlq_clause(merged_search_text) ])) if base_filters else _nlq_clause(merged_search_text)
+        total, results = _run_expr(where_expr)
+
+        # Try 2: NLQ over raw user query
+        if total == 0:
+            where_expr = and_(*(base_filters + [ _nlq_clause(ai_q) ])) if base_filters else _nlq_clause(ai_q)
+            total, results = _run_expr(where_expr)
+
+        # Try 3: Simple LIKE over raw user query
+        if total == 0:
+            where_expr = and_(*(base_filters + [ like_filters(ai_q) ])) if base_filters else like_filters(ai_q)
+            total, results = _run_expr(where_expr)
+
+        pages = (total // per_page) + (1 if total % per_page else 0)
+        q_display = ai_q  # ensures results block renders even in AI mode
+
+    elif q_raw or any([sel_industries, sel_sections, sel_rules, sel_parties, sel_s1, sel_s2]):
         clauses = []
         if sel_industries: clauses.append(Acer.c.industry_sector.in_(sel_industries))
         if sel_sections:   clauses.append(Acer.c.section.in_(sel_sections))
@@ -490,46 +433,14 @@ def home():
         if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
         if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
         if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-        # NLQ clause instead of plain LIKE (handles "give me the case laws on ...")
-        clauses.append(_nlq_clause(keywords_for_search))
+        if q_raw:          clauses.append(_nlq_clause(q_raw))
         where_expr = and_(*clauses) if clauses else text("1=1")
-
-        page = max(int(request.args.get("page", 1) or 1), 1)
-        per_page = 10
-        offset = (page - 1) * per_page
-        with ENGINE.connect() as conn:
-            total = conn.execute(select(func.count()).select_from(Acer).where(where_expr)).scalar_one()
-            rows = conn.execute(
-                select(*COMMON_COLS).where(where_expr).order_by(Acer.c.id.desc()).limit(per_page).offset(offset)
-            ).mappings().all()
-        results = [dict(r) for r in rows]
+        total, results = _run_expr(where_expr)
         pages = (total // per_page) + (1 if total % per_page else 0)
+        q_display = q_raw
+    else:
+        q_display = ""
 
-    # Standard search
-    elif q or any([sel_industries, sel_sections, sel_rules, sel_parties, sel_s1, sel_s2]):
-        clauses = []
-        if sel_industries: clauses.append(Acer.c.industry_sector.in_(sel_industries))
-        if sel_sections:   clauses.append(Acer.c.section.in_(sel_sections))
-        if sel_rules:      clauses.append(Acer.c.rule.in_(sel_rules))
-        if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
-        if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
-        if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-        if q:              clauses.append(_nlq_clause(q))   # <-- NLQ here too
-        where_expr = and_(*clauses) if clauses else text("1=1")
-
-        page = max(int(request.args.get("page", 1) or 1), 1)
-        per_page = 10
-        offset = (page - 1) * per_page
-        with ENGINE.connect() as conn:
-            total = conn.execute(select(func.count()).select_from(Acer).where(where_expr)).scalar_one()
-            rows = conn.execute(
-                select(*COMMON_COLS).where(where_expr).order_by(Acer.c.id.desc()).limit(per_page).offset(offset)
-            ).mappings().all()
-        results = [dict(r) for r in rows]
-        pages = (total // per_page) + (1 if total % per_page else 0)
-
-    # Pagination links
-    page = max(int(request.args.get("page", 1) or 1), 1)
     def page_url(n):
         params = {
             'industry': sel_industries, 'section': sel_sections, 'rule': sel_rules,
@@ -538,7 +449,7 @@ def home():
         if is_ai_search:
             params['ai_search'] = 'true'; params['ai_q'] = ai_q
         else:
-            params['q'] = q
+            params['q'] = q_raw
         return url_for("home", **params)
 
     window = 10
@@ -555,12 +466,13 @@ def home():
         selected={"industry": set(sel_industries), "section": set(sel_sections),
                   "rule": set(sel_rules), "party": set(sel_parties),
                   "s1": set(sel_s1), "s2": set(sel_s2)},
-        q=q, results=results, page=page, pages=pages, total=total,
+        q=q_display,
+        results=results, page=page, pages=pages, total=total,
         page_urls=page_urls, prev_url=prev_url, next_url=next_url,
         ai_response=ai_response_data, ai_q=ai_q
     )
 
-# --------- Public case detail (unchanged logic) ---------
+# --------- Public case detail ---------
 @app.get("/case/<int:rid>")
 def public_case_detail(rid: int):
     with ENGINE.connect() as conn:
@@ -591,7 +503,7 @@ def public_case_detail(rid: int):
     if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
     if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
     if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-    if q:              clauses.append(_nlq_clause(q))  # keep it consistent here too
+    if q:              clauses.append(_nlq_clause(q))
     where_expr = and_(*clauses) if clauses else text("1=1")
 
     with ENGINE.connect() as conn:
@@ -617,7 +529,7 @@ def public_case_detail(rid: int):
         list_results=list_results,
     )
 
-# ======================= SUMMARY HELPERS & ROUTE =======================
+# ======================= Summarize Results =======================
 def _fetch_rows_for_current_filters(args, cap=60):
     is_ai_search = args.get('ai_search') == 'true'
     ai_q = (args.get('ai_q') or "").strip() if is_ai_search else ""
@@ -637,9 +549,9 @@ def _fetch_rows_for_current_filters(args, cap=60):
     if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
     if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
     if is_ai_search and ai_q:
-        clauses.append(_nlq_clause(ai_q))  # NLQ for AI input
+        clauses.append(_nlq_clause(ai_q))
     elif q:
-        clauses.append(_nlq_clause(q))     # NLQ for normal search
+        clauses.append(_nlq_clause(q))
     where_expr = and_(*clauses) if clauses else text("1=1")
 
     with ENGINE.connect() as conn:
@@ -654,7 +566,6 @@ def _fetch_rows_for_current_filters(args, cap=60):
     return [dict(r) for r in rows]
 
 def _build_llm_docs(rows):
-    """Turn DB rows into compact docs the model can cite."""
     docs = []
     for r in rows:
         case_no = str(r.get("case_law_number") or "").strip()
@@ -675,40 +586,16 @@ def _build_llm_docs(rows):
         })
     return docs
 
-def _compose_case_lines(rows, max_chars=220):
-    # kept for compatibility; not used by JSON-mode summarizer
-    lines = []
-    for r in rows:
-        case_no = str(r.get("case_law_number") or "").strip()
-        party   = str(r.get("name_of_party") or "").strip()
-
-        d = r.get("date")
-        if isinstance(d, (date, datetime)):
-            date_str = d.strftime("%Y-%m-%d")
-        else:
-            date_str = str(d or "").strip()
-
-        head = _strip_all_html(r.get("summary_head_note") or "")
-        head = re.sub(r"\s+", " ", head).strip()
-        if len(head) > max_chars:
-            head = head[:max_chars].rstrip() + "…"
-
-        header_bits = [p for p in [case_no, party, date_str] if p]
-        header = " — ".join(header_bits) if header_bits else "(case)"
-        lines.append(f"- {header}: {head}" if head else f"- {header}")
-    return "\n".join(lines)
-
 @app.get("/summarize_results")
 def summarize_results():
     try:
-        rows = _fetch_rows_for_current_filters(request.args, cap=20)  # 8–20 is a sweet spot
+        rows = _fetch_rows_for_current_filters(request.args, cap=20)
         if not rows:
             return jsonify({"ok": False, "message": "No case law results to summarize for the current filters."})
 
         topic = _selected_topic(request.args)
         docs  = _build_llm_docs(rows)
 
-        # Build strict, topic-focused prompt; JSON-mode response
         snippets = "\n".join(
             f"- Case: {d['case_no']} — {d['party']} ({d.get('year','')}) | Court: {d.get('court','')} | State: {d.get('state','')}\n"
             f"  Headnote: {d['headnote_clean']}"
@@ -733,8 +620,7 @@ Return JSON with keys:
                  "You are a concise Indian GST legal analyst. Only use the supplied snippets; if insufficient, say so briefly."},
                 {"role": "user", "content": user_prompt}
             ],
-            model="gpt-4o-mini",
-            max_tokens=900, temperature=0.3
+            model="gpt-4o-mini", max_tokens=900, temperature=0.3
         )
 
         answer    = _clean_summary((data or {}).get("answer", ""))
@@ -743,13 +629,12 @@ Return JSON with keys:
         if not answer.strip():
             return jsonify({"ok": False, "message": "The model returned an empty summary. Try refining filters and retry."})
 
-        # Keep original shape; extra 'citations' is harmless if the front-end ignores it
         return jsonify({"ok": True, "summary": answer, "citations": citations})
 
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
 
-# ======================= ADMIN & CONTACT =======================
+# ======================= Admin: list/edit/new/export/delete =======================
 @app.get("/admin")
 def admin_root():
     return redirect(url_for("admin_caselaws"))
@@ -760,7 +645,7 @@ def admin_caselaws():
     page = max(int(request.args.get("page", 1)), 1)
     per_page = min(max(int(request.args.get("per_page", 20)), 1), 200)
     offset = (page - 1) * per_page
-    where_clause = _nlq_clause(q) if q else text("1=1")  # NLQ in admin search too
+    where_clause = _nlq_clause(q) if q else text("1=1")
     with ENGINE.connect() as conn:
         total = conn.execute(select(func.count()).select_from(Acer).where(where_clause)).scalar_one()
         rows = conn.execute(
@@ -823,7 +708,157 @@ def admin_delete_case(rid):
         conn.execute(delete(Acer).where(Acer.c.id == rid))
     return redirect(url_for("admin_caselaws", mode="delete"))
 
-# --- Contact page (nav safety) ---
+# ======================= Admin: BULK UPLOAD (Excel/CSV) =======================
+_TEMPLATE_COLUMNS = [
+    "case_law_number","name_of_party","state","year","type_of_court",
+    "industry_sector","subject_matter1","subject_matter2","section","rule",
+    "case_name","date","basic_detail","summary_head_note","citation",
+    "question_answered","full_case_law"
+]
+# simple synonym map (lowercased simplified -> canonical)
+_SYNONYMS = {
+    "case lawnumber":"case_law_number","case law number":"case_law_number","caselaw number":"case_law_number",
+    "party":"name_of_party","name of party":"name_of_party",
+    "type of court":"type_of_court",
+    "industry":"industry_sector","industry sector":"industry_sector",
+    "subject matter1":"subject_matter1","subject-matter 1":"subject_matter1","subjectmatter1":"subject_matter1",
+    "subject matter2":"subject_matter2","subject-matter 2":"subject_matter2","subjectmatter2":"subject_matter2",
+    "basic detail":"basic_detail",
+    "summary head note":"summary_head_note","headnote":"summary_head_note","summary":"summary_head_note",
+    "question answered":"question_answered","questions answered":"question_answered",
+    "full case law":"full_case_law","full text":"full_case_law"
+}
+def _simp(s:str)->str:
+    return re.sub(r"[^a-z0-9]+"," ", (s or "").strip().lower()).strip()
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    rename = {}
+    for c in df.columns:
+        sc = _simp(c)
+        if sc in _SYNONYMS: rename[c] = _SYNONYMS[sc]
+        elif sc in _TEMPLATE_COLUMNS: rename[c] = sc
+        else:
+            # try exact canonical if original equals
+            if c in _TEMPLATE_COLUMNS: rename[c] = c
+    df = df.rename(columns=rename)
+    # keep only known columns (excluding id)
+    keep = [c for c in _TEMPLATE_COLUMNS if c in df.columns]
+    return df[keep].copy()
+
+def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if "year" in df.columns:
+        def _to_year(v):
+            if pd.isna(v): return None
+            try:
+                s = str(v).strip()
+                if len(s) >= 4 and s[:4].isdigit(): return int(s[:4])
+                return int(float(s))
+            except Exception:
+                return None
+        df["year"] = df["year"].map(_to_year)
+        # try to backfill from date
+        if "date" in df.columns:
+            df["year"] = df["year"].fillna(df["date"].dt.year)
+    # strip strings
+    for c in df.columns:
+        if df[c].dtype == object:
+            df[c] = df[c].map(lambda x: (str(x).strip() if x is not None else None))
+    return df
+
+@app.get("/admin/bulk_upload/template")
+def admin_bulk_template():
+    df = pd.DataFrame(columns=_TEMPLATE_COLUMNS)
+    buf = io.BytesIO()
+    df.to_csv(buf, index=False, encoding="utf-8-sig")
+    buf.seek(0)
+    return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="bulk_upload_template.csv")
+
+@app.route("/admin/bulk_upload", methods=["GET","POST"])
+def admin_bulk_upload():
+    if request.method == "GET":
+        # If you already have admin_bulk_upload.html, this render will use it.
+        # If not, we serve a minimal inline form so the route still works.
+        try:
+            return render_template("admin_bulk_upload.html")
+        except Exception:
+            html = """
+            <h2>Bulk Upload Case Laws (Excel/CSV)</h2>
+            <p>Accepted: .xlsx, .xls, .csv &nbsp;|&nbsp;
+               <a href="{{ url_for('admin_bulk_template') }}">Download CSV template</a></p>
+            <form method="post" enctype="multipart/form-data">
+              <input type="file" name="file" required>
+              <button type="submit">Upload</button>
+              <a href="{{ url_for('admin_caselaws') }}">Back to Admin</a>
+            </form>
+            """
+            return render_template_string(html)
+
+    # POST
+    f = request.files.get("file")
+    if not f or not getattr(f, "filename", ""):
+        flash("No file selected.", "err")
+        return redirect(url_for("admin_bulk_upload"))
+    filename = secure_filename(f.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_UPLOADS:
+        flash("Unsupported file type. Please upload .xlsx, .xls or .csv", "err")
+        return redirect(url_for("admin_bulk_upload"))
+
+    try:
+        data = f.read()
+        if ext in {".xlsx",".xls"}:
+            df = pd.read_excel(io.BytesIO(data))
+        else:
+            df = pd.read_csv(io.BytesIO(data))
+    except Exception as e:
+        flash(f"Failed to read file: {e}", "err")
+        return redirect(url_for("admin_bulk_upload"))
+
+    if df.empty:
+        flash("Uploaded file is empty.", "err")
+        return redirect(url_for("admin_bulk_upload"))
+
+    df = _normalize_columns(df)
+    if df.empty:
+        flash("No recognizable columns found. Use the template headers.", "err")
+        return redirect(url_for("admin_bulk_upload"))
+
+    df = _coerce_types(df)
+    # limit to avoid accidental huge uploads
+    if len(df) > 5000:
+        df = df.iloc[:5000, :]
+
+    # Prepare rows dicts (exclude None-only rows)
+    records = []
+    for _, row in df.iterrows():
+        rec = {}
+        for c in _TEMPLATE_COLUMNS:
+            if c in df.columns:
+                v = row[c]
+                if pd.isna(v): v = None
+                rec[c] = v
+        if any(v not in (None, "") for v in rec.values()):
+            records.append(rec)
+
+    if not records:
+        flash("No valid rows to insert.", "err")
+        return redirect(url_for("admin_bulk_upload"))
+
+    inserted = 0
+    try:
+        with ENGINE.begin() as conn:
+            conn.execute(insert(Acer), records)
+            inserted = len(records)
+    except Exception as e:
+        flash(f"Insert failed: {e}", "err")
+        return redirect(url_for("admin_bulk_upload"))
+
+    flash(f"Uploaded and inserted {inserted} row(s).", "ok")
+    return redirect(url_for("admin_caselaws"))
+
+# ======================= Contact =======================
 @app.route("/contact", methods=["GET", "POST"])
 def contact():
     team = [
@@ -838,6 +873,43 @@ def contact():
         return redirect(url_for("contact"))
     return render_template("contact.html", team=team)
 
+# ======================= Meta & Subjects helpers (after routes use) =======================
+def _distinct(colname):
+    ck = f"distinct:{colname}"
+    hit = _meta_cache_get(ck)
+    if hit is not None:
+        return hit
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            select(getattr(Acer.c, colname)).where(
+                getattr(Acer.c, colname).isnot(None),
+                getattr(Acer.c, colname) != ""
+            ).distinct().order_by(getattr(Acer.c, colname).asc())
+        ).scalars().all()
+    vals = [r for r in rows if r not in (None, "")]
+    _meta_cache_set(ck, vals, ttl_sec=300)
+    return vals
+
+def _subjects_grouped():
+    ck = "subjects"
+    hit = _meta_cache_get(ck)
+    if hit is not None:
+        return hit
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            select(Acer.c.subject_matter1, Acer.c.subject_matter2)
+            .where(Acer.c.subject_matter1.isnot(None), Acer.c.subject_matter1 != "")
+        ).all()
+    d = defaultdict(set)
+    for s1, s2 in rows:
+        k = (s1 or "").strip()
+        v = (s2 or "").strip()
+        if k:
+            if v: d[k].add(v)
+            else: d[k] = d[k]
+    out = {k: sorted(v) for k, v in sorted(d.items(), key=lambda kv: kv[0].lower())}
+    _meta_cache_set(ck, out, ttl_sec=300)
+    return out
+
 if __name__ == "__main__":
-    # For local dev only; Render uses gunicorn start command
     app.run(debug=True)
