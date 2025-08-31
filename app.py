@@ -605,19 +605,30 @@ def get_ai_explanation(prompt_text):
 
     # --- Construct the prompt for the AI ---
     # Instruct the AI to generate content under specific headings and add the disclaimer.
+    # Inside get_ai_explanation function
     ai_prompt = (
         "You are an expert on Indian GST law. Please structure your response exactly as follows:\n\n"
         "A. Relevant Provisions\n"
-        "<Write 2-3 well-structured paragraphs here focusing ONLY on the relevant sections and rules of the CGST/IGST Acts that pertain to the user's query. "
-        "Ensure the paragraphs are clear, justified, and directly address the statutory provisions. Do NOT mention or invent ANY case law, case names, parties, judges, or citations.>\n\n"
+        "<Write 2-3 well-structured paragraphs here focusing ONLY on the LATEST and relevant sections and rules "
+        "of the CGST/IGST Acts that pertain to the user's query. "
+        "Ensure the paragraphs are clear, justified, and directly address the statutory provisions. "
+        "Do NOT mention or invent ANY case law, case names, parties, judges, or citations.>\n\n"
         "B. Applicable Circulars/Notifications\n"
-        "<Write 2-3 well-structured paragraphs here detailing the specific circulars and notifications issued by the GST Council or CBIC that are applicable to the user's query. "
-        "Mention the circular/notification number and date where known. Ensure the paragraphs are clear, justified, and directly address these administrative guidelines. "
+        "<Write 2-3 well-structured paragraphs here detailing the LATEST and specific circulars and notifications "
+        "issued by the GST Council or CBIC that are applicable to the user's query. "
+        "Mention the circular/notification number and date where known. "
+        "Ensure the paragraphs are clear, justified, and directly address these administrative guidelines. "
         "Do NOT mention or invent ANY case law, case names, parties, judges, or citations.>\n\n"
         "---\n"
-        "It is advisable for the user to refer to the latest provisions of the law.\n"
+        "It is advisable for the user to refer to the latest provisions of the law.\n" # Keep this reminder
         f"User Query: {user_query}"
     )
+    # ... inside the system message ...
+    {"role": "system", "content": (
+        "You are a precise Indian GST legal analyst. "
+        "Prioritize providing information based on the LATEST versions of the CGST/IGST Acts, Rules, Notifications, and Circulars. "
+        # ... rest of system message ...
+    )}
 
     statute_text = ""
     circular_text = ""
