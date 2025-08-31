@@ -578,88 +578,128 @@ def _clean_summary(text: str) -> str:
 
 # ======================= AI EXPLANATION (ENHANCED: Statute + Circulars) =======================
 # ======================= AI EXPLANATION (DETAILED + NO CASE NAMES) - ENHANCED =======================
+# ======================= AI EXPLANATION (MODIFIED: Specific Headings & Disclaimer) =======================
 def get_ai_explanation(prompt_text):
     """
-    Generates the AI explanation for the statutory provisions.
-    Ensures only one attempt is made and provides clearer error feedback.
+    Generates a two-part AI explanation with specific headings and a disclaimer.
+    Part A: Relevant Provisions (Sections/Rules).
+    Part B: Applicable Circulars/Notifications.
+    Adds a standard disclaimer at the end.
+    Caches the combined result.
     """
     args = request.args
+    # Create a unique cache key based ONLY on the query text for this specific format
     key_src = "|".join([
-        "ai_explain_v3", (prompt_text or "").strip(),
-        ",".join(sorted(args.getlist("industry"))),
-        ",".join(sorted(args.getlist("section"))),
-        ",".join(sorted(args.getlist("rule"))),
-        ",".join(sorted(args.getlist("party"))),
-        ",".join(sorted(args.getlist("s1"))),
-        ",".join(sorted(args.getlist("s2"))),
+        "ai_explain_headings_disclaimer_v1", (prompt_text or "").strip(),
+        # Filter context explicitly removed from cache key and prompt as requested previously
     ])
-    cache_key = "ai_explain:" + hashlib.sha256(key_src.encode("utf-8")).hexdigest()
+    cache_key = "ai_explain_hd:" + hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _ai_cache_get(cache_key)
     if cached is not None:
-        print(f"[AI Explain] Cache HIT for key: {cache_key[:20]}...")
-        return {"text": cached, "cached": True}
+        print(f"[AI Explain HD] Cache HIT for key: {cache_key[:20]}...")
+        return cached # Return the cached dict directly
 
-    print(f"[AI Explain] Cache MISS for key: {cache_key[:20]}... Generating...")
-    context_bits = []
-    if args.getlist("section"): context_bits.append("Sections: " + ", ".join(args.getlist("section")))
-    if args.getlist("rule"):    context_bits.append("Rules: " + ", ".join(args.getlist("rule")))
-    if args.getlist("industry"):context_bits.append("Industry: " + ", ".join(args.getlist("industry")))
-    if args.getlist("s1"):      context_bits.append("Subject-1: " + ", ".join(args.getlist("s1")))
-    if args.getlist("s2"):      context_bits.append("Subject-2: " + ", ".join(args.getlist("s2")))
-    filter_context = (" | ".join(context_bits)) if context_bits else "General GST"
-    full_prompt = (
-        "You are an expert on Indian GST. Write 2–4 compact paragraphs that explain ONLY the statutory position: "
-        "focus on CGST/IGST Acts, Rules, relevant Notifications and Circulars. "
-        "Do NOT mention or invent ANY case names, parties, judges, or case citations. "
-        "NO bullet points, NO generic wrap-ups; just crisp paragraphs aligned to the query and filters. "
-        f"Filter Context: {filter_context} "
-        f"User Query: {(prompt_text or '').strip()} "
+    print(f"[AI Explain HD] Cache MISS for key: {cache_key[:20]}... Generating...")
+
+    user_query = (prompt_text or '').strip()
+
+    # --- Construct the prompt for the AI ---
+    # Instruct the AI to generate content under specific headings and add the disclaimer.
+    ai_prompt = (
+        "You are an expert on Indian GST law. Please structure your response exactly as follows:\n\n"
+        "A. Relevant Provisions\n"
+        "<Write 2-3 well-structured paragraphs here focusing ONLY on the relevant sections and rules of the CGST/IGST Acts that pertain to the user's query. "
+        "Ensure the paragraphs are clear, justified, and directly address the statutory provisions. Do NOT mention or invent ANY case law, case names, parties, judges, or citations.>\n\n"
+        "B. Applicable Circulars/Notifications\n"
+        "<Write 2-3 well-structured paragraphs here detailing the specific circulars and notifications issued by the GST Council or CBIC that are applicable to the user's query. "
+        "Mention the circular/notification number and date where known. Ensure the paragraphs are clear, justified, and directly address these administrative guidelines. "
+        "Do NOT mention or invent ANY case law, case names, parties, judges, or citations.>\n\n"
+        "---\n"
+        "It is advisable for the user to refer to the latest provisions of the law.\n"
+        f"User Query: {user_query}"
     )
 
-    # --- Single Attempt with Clear Error Handling ---
-    try:
-        print(f"[AI Explain] Calling OpenAI API with model '{OPENAI_MODEL}'...")
-        start_time = time.time()
-        # Use only the primary OpenAI client method for clarity and single attempt
-        # Remove the fallback within this call to ensure one attempt
-        if not OPENAI_API_KEY:
-            raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
+    statute_text = ""
+    circular_text = ""
+    disclaimer = "It is advisable for the user to refer to the latest provisions of the law."
 
-        from openai import OpenAI # Prefer the newer client
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a precise Indian GST legal analyst. Never cite or name cases; stick to sections, rules, notifications, circulars."},
-                {"role": "user", "content": full_prompt},
+    try:
+        print(f"[AI Explain HD] Calling OpenAI API...")
+        # Single call to generate the full structured response
+        full_response = _openai_chat(
+            [
+                {"role": "system", "content": (
+                    "You are a precise Indian GST legal analyst. "
+                    "Follow the EXACT output format requested: "
+                    "Start with 'A. Relevant Provisions', followed by paragraphs, "
+                    "then 'B. Applicable Circulars/Notifications', followed by paragraphs, "
+                    "then '---', then the disclaimer. "
+                    "Focus strictly on statutory provisions (Acts, Rules) and administrative documents (Circulars, Notifications). "
+                    "Never cite or name cases. Ensure paragraphs are well-structured."
+                )},
+                {"role": "user", "content": ai_prompt},
             ],
-            max_tokens=700,
+            max_tokens=1200, # Adjust if needed
             temperature=0.3,
         )
-        text = (resp.choices[0].message.content or "").strip()
-        elapsed_time = time.time() - start_time
-        print(f"[AI Explain] OpenAI API call successful (took {elapsed_time:.2f}s). Response length: {len(text)} chars.")
-        if text:
-            _ai_cache_set(cache_key, text, ttl_sec=900)
-            print(f"[AI Explain] Generated and cached result for key: {cache_key[:20]}...")
-            return {"text": text, "cached": False}
+        full_response = (full_response or "").strip()
+
+        if not full_response:
+             raise ValueError("OpenAI returned an empty response.")
+
+        # --- Parse the AI response ---
+        # 1. Split by the section headings
+        # Find the start of section B
+        section_b_start = full_response.find("B. Applicable Circulars/Notifications")
+        if section_b_start == -1:
+            # If B section not found, assume whole response is A section
+            statute_text = full_response
+            circular_text = "Applicable circulars and notifications could not be generated."
+            print("[AI Explain HD] Warning: Could not parse section B. Assigning all text to section A.")
         else:
-            error_msg = "OpenAI API returned an empty response."
-            print(f"[AI Explain] {error_msg}")
-            return {"error": error_msg}
+            # Extract A section (text before B section)
+            statute_text = full_response[:section_b_start].replace("A. Relevant Provisions", "", 1).strip()
+
+            # Find the start of the disclaimer separator
+            disclaimer_start = full_response.find("---", section_b_start)
+            if disclaimer_start == -1:
+                # If separator not found, take everything after B section as B section
+                circular_text = full_response[section_b_start + len("B. Applicable Circulars/Notifications"):].strip()
+                # Add disclaimer manually if not found
+                # Note: The AI prompt asks for it, but we add it here too to be safe.
+            else:
+                # Extract B section (text between B heading and disclaimer separator)
+                b_end_index = disclaimer_start
+                b_content = full_response[section_b_start + len("B. Applicable Circulars/Notifications"):b_end_index].strip()
+                # Extract potential disclaimer text (text after separator)
+                potential_disclaimer = full_response[disclaimer_start + len("---"):].strip()
+
+                circular_text = b_content
+
+                # Optional: Verify the disclaimer matches or log if it's different
+                # if potential_disclaimer and potential_disclaimer != disclaimer:
+                #     print(f"[AI Explain HD] AI generated disclaimer differs slightly: '{potential_disclaimer}'")
+
 
     except Exception as e:
-        # Catch any error during the API call or processing
-        error_msg = f"Failed to generate AI explanation: {str(e)}"
-        print(f"[AI Explain] ERROR: {error_msg}")
-        # Return the error message so it can be displayed in the template
-        return {"error": error_msg}
+        error_msg = f"Error generating AI explanation: {e}"
+        print(error_msg)
+        # Return error messages for each part
+        statute_text = f"Error generating statutory provisions: {e}"
+        circular_text = f"Error generating circulars/notifications: {e}"
+        # Disclaimer is static, so it remains the default string
 
-    # --- This point should ideally not be reached ---
-    # But as a final fallback, return an error
-    error_msg = "An unexpected error occurred in AI explanation generation."
-    print(f"[AI Explain] UNEXPECTED FALLTHROUGH: {error_msg}")
-    return {"error": error_msg}
+    # --- Cache and Return Result ---
+    result = {
+        "statute_text": statute_text,
+        "circular_text": circular_text,
+        "disclaimer": disclaimer, # Include disclaimer in the returned data
+        "cached": False
+    }
+    _ai_cache_set(cache_key, result, ttl_sec=900) # Cache for 15 minutes
+    print(f"[AI Explain HD] Generated and cached result for key: {cache_key[:20]}...")
+    return result
+
 # ======================= HYBRID AI SEARCH (vector + lexical + vector fallback) =======================
 # --- Keep the _get_common_cols and _run_query functions as they are ---
 def _get_common_cols():
