@@ -1,8 +1,10 @@
 from flask import Flask, request, render_template, abort, redirect, url_for, flash, send_file, jsonify, render_template_string
 from sqlalchemy import create_engine, MetaData, Table, select, or_, func, text, and_, insert, update, delete
+# Import the `cast` and `float` functions for potential vector column casting
+from sqlalchemy import cast, Float
 from bs4 import BeautifulSoup
 from werkzeug.utils import secure_filename
-import os, re, io, ssl, json, time, hashlib
+import os, re, io, ssl, json, time, hashlib, math
 import pandas as pd
 from collections import defaultdict
 from datetime import date, datetime
@@ -20,26 +22,21 @@ DB_HOST = os.getenv("TIDB_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
 DB_PORT = str(os.getenv("TIDB_PORT") or os.getenv("MYSQL_PORT", "3306"))
 DB_NAME = os.getenv("TIDB_DB") or os.getenv("MYSQL_DB", "mydb")
 TABLE_NAME = "acer_details"
-
 DATABASE_URL = (
     f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     "?charset=utf8mb4"
 )
-
 CONNECT_ARGS = {}
-
 DB_USE_TLS = os.getenv("DB_USE_TLS")
 if DB_USE_TLS is not None:
     use_tls = DB_USE_TLS.strip().lower() in ("1", "true", "yes")
 else:
     use_tls = (DB_PORT == "4000") or ("tidbcloud.com" in (DB_HOST or "").lower())
-
 if use_tls:
     try:
         print("[TLS] /etc/secrets contents:", os.listdir("/etc/secrets"))
     except Exception as _e:
         print("[TLS] Could not list /etc/secrets:", _e)
-
     env_ca = (os.getenv("TIDB_SSL_CA") or "").strip()
     candidates = [p for p in [env_ca,
                               "/etc/secrets/TIDB_SSL_CA",
@@ -48,7 +45,6 @@ if use_tls:
                               "/etc/ssl/certs/isrgrootx1.pem",
                               "/etc/ssl/certs/ca-certificates.crt"] if p]
     ssl_ca_path = next((p for p in candidates if os.path.isfile(p)), None)
-
     if ssl_ca_path:
         CONNECT_ARGS = {"ssl": {"ca": ssl_ca_path}}
         print(f"[DB] TLS enabled with CA: {ssl_ca_path}")
@@ -64,7 +60,6 @@ if use_tls:
             ) from e
 else:
     print("[DB] TLS not required (DB_USE_TLS=0 or non-TiDB settings).")
-
 ENGINE = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=CONNECT_ARGS)
 metadata = MetaData()
 Acer = Table(TABLE_NAME, metadata, autoload_with=ENGINE)
@@ -76,7 +71,6 @@ ALL_COLS = [
     "case_name","date","basic_detail","summary_head_note","citation",
     "question_answered","full_case_law",
 ]
-
 # Search surface (fast & focused; explicitly NOT scanning full_case_law)
 SEARCHABLE_COLS = [
     "case_law_number","name_of_party","case_name","state",
@@ -92,6 +86,24 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 _env_model = (os.getenv("OPENAI_MODEL") or "").strip()
 _ALLOWED = {"gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"}
 OPENAI_MODEL = _env_model if _env_model in _ALLOWED else "gpt-4o-mini"
+# Embeddings
+EMBED_MODEL = (os.getenv("OPENAI_EMBED_MODEL") or "text-embedding-3-small").strip()
+# Try to auto-detect a column that stores embeddings
+EMBED_COL_CANDIDATES = [
+    "embedding","embeddings","text_embedding","text_embeddings",
+    "summary_embedding","headnote_embedding","openai_embedding",
+    "vector","vec","text_vector"
+]
+# Hybrid ranking weights (tweakable via env)
+W_VEC   = float(os.getenv("HYBRID_W_VEC", "0.7"))
+W_LEX   = float(os.getenv("HYBRID_W_LEX", "0.3"))
+SCORE_MIN = float(os.getenv("HYBRID_SCORE_MIN", "0.18"))  # threshold to drop very weak matches
+CANDIDATE_PRIMARY = int(os.getenv("HYBRID_CANDIDATES_PRIMARY", "400"))
+CANDIDATE_WIDE    = int(os.getenv("HYBRID_CANDIDATES_WIDE", "800"))
+# Vector-only recall sweep controls
+VECTOR_SWEEP_LIMIT = int(os.getenv("VECTOR_SWEEP_LIMIT", "1200"))  # how many rows to scan for pure vector recall
+VECTOR_TOPK        = int(os.getenv("VECTOR_TOPK", "250"))          # top-k vector-only hits to merge
+VEC_ONLY_MIN       = float(os.getenv("VEC_ONLY_MIN", "0.40"))      # min cosine to keep vector-only hits (Lowered as discussed)
 
 def _openai_chat(messages, max_tokens=800, temperature=0.35):
     if not OPENAI_API_KEY:
@@ -145,6 +157,29 @@ def _openai_chat_json(messages, model=None, max_tokens=900, temperature=0.3):
             m = re.search(r"\{.*\}", raw, flags=re.S)
             return json.loads(m.group(0)) if m else {}
 
+def _openai_embed(text: str, model: str = None):
+    """
+    Get a single embedding vector for text. Falls back cleanly if API is missing.
+    """
+    if not OPENAI_API_KEY:
+        return None
+    model = model or EMBED_MODEL
+    try:
+        from openai import OpenAI  # type: ignore
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.embeddings.create(model=model, input=text)
+        vec = resp.data[0].embedding
+        return vec
+    except Exception as e_new:
+        try:
+            import openai  # type: ignore
+            openai.api_key = OPENAI_API_KEY
+            resp = openai.Embedding.create(model=model, input=text)
+            return resp["data"][0]["embedding"]
+        except Exception as e_old:
+            print("Embedding error:", e_old or e_new)
+            return None
+
 # ======================= RUNTIME CACHES =======================
 _AI_CACHE = {}
 _META_CACHE = {}
@@ -157,7 +192,7 @@ def _ai_cache_get(key: str):
         return None
     return e["value"]
 
-def _ai_cache_set(key: str, value: str, ttl_sec: int = 900):
+def _ai_cache_set(key: str, value, ttl_sec: int = 900):
     _AI_CACHE[key] = {"value": value, "exp": time.time() + ttl_sec}
 
 def _meta_cache_get(name: str):
@@ -174,36 +209,49 @@ def _meta_cache_set(name: str, value, ttl_sec: int = 300):
 # ======================= SEARCH HELPERS =======================
 def like_filters(q: str):
     """
-    OR across SEARCHABLE_COLS using LIKE (case-insensitive under typical MySQL *_ci collations).
-    NOTE: no LOWER() wrapper so indexes/collation can help -> faster.
+    OR across SEARCHABLE_COLS using LIKE.
+    SAFE: never degrade to a match-all for non-empty queries.
     """
+    q = (q or "").strip()
+    if not q:
+        # User typed nothing (or query collapsed) -> do NOT dump the entire table
+        return text("0=1")
     terms = []
     for col in SEARCHABLE_COLS:
         if hasattr(Acer.c, col):
             terms.append(getattr(Acer.c, col).like(f"%{q}%"))
-    return or_(*terms) if terms else text("1=1")
+    # If no valid searchable columns were found, fail closed.
+    return or_(*terms) if terms else text("0=1")
 
-_STOPWORDS = {
-    "a","an","the","this","that","these","those","me","we","us","you","your","yours",
-    "give","show","find","get","provide","list","tell","display","search","look","fetch",
-    "please","kindly","need","want","would","like","to","for","on","about","regarding","related","with","in","of","by","under","and","or",
-    "cases","case","laws","law","caselaw","caselaws"
-}
+# ---- Minimal stopwords (we rely on ranking rather than heavy filtering)
+_STOPWORDS = {"a","an","the","of","and","or","in","on","to","by","for","with","under","about",
+              "this","that","these","those","some"}
 _KEEP_SHORT = {"itc","gst","rcm","hsn","pos","b2b","b2c"}
+# Domain phrases we treat as MUST if present in the query
 _DOMAIN_PHRASES = [
-    "composition scheme","input tax credit","place of supply","reverse charge",
-    "works contract","advance ruling","e way bill","e-way bill","zero rated",
-    "export of services","intermediary services","blocked credit","time of supply",
-    "credit note","debit note","classification dispute","valuation","anti profiteering",
-    "refund of itc","job work","pure agent"
+    "intermediary services","intermediary service",
+    "input tax credit","place of supply","reverse charge",
+    "works contract","advance ruling",
+    "e way bill","e-way bill","zero rated","zero-rated",
+    "export of services","blocked credit","time of supply",
+    "credit note","debit note","classification dispute",
+    "valuation","anti profiteering","refund of itc",
+    "job work","pure agent"
 ]
 
 def _nlq_keywords(q: str):
-    if not q: return []
+    """
+    Phrase-first extraction with minimal stopwording.
+    Keeps multi-word domain phrases; remaining single tokens are kept
+    unless they are very short or in a tiny stopword set.
+    """
+    if not q:
+        return []
     s = q.lower()
     s = re.sub(r"[^\w\s\-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     kept, seen = [], set()
+    # 1) Capture domain phrases first (multi-word keepers)
     s_for_phrase = " " + s + " "
     for ph in sorted(_DOMAIN_PHRASES, key=len, reverse=True):
         ph_norm = " " + ph + " "
@@ -211,11 +259,14 @@ def _nlq_keywords(q: str):
             if ph not in seen:
                 kept.append(ph); seen.add(ph)
             s_for_phrase = s_for_phrase.replace(ph_norm, " ")
+    # 2) Residual single tokens (minimal stopwords)
     residual = re.sub(r"\s+", " ", s_for_phrase).strip()
     if residual:
         for tok in residual.split():
-            if tok in _STOPWORDS: continue
-            if len(tok) <= 2 and tok not in _KEEP_SHORT: continue
+            if tok in _STOPWORDS:
+                continue
+            if len(tok) <= 2 and tok not in _KEEP_SHORT:
+                continue
             if tok not in seen:
                 kept.append(tok); seen.add(tok)
     return kept
@@ -223,9 +274,21 @@ def _nlq_keywords(q: str):
 def _nlq_clause(query: str):
     toks = _nlq_keywords(query)
     if not toks:
-        return like_filters(query)
-    # AND across tokens; each token is OR across columns
-    return and_(*[like_filters(t) for t in toks])
+        # Light fallback: try simple tokenization; if still empty, fail closed via like_filters
+        simple = " ".join(sorted(_tokenize(query)))
+        return like_filters(simple if simple else query)
+    phrases = [t for t in toks if " " in t]
+    singles = [t for t in toks if " " not in t]
+    must_clauses = [like_filters(p) for p in phrases] if phrases else []
+    should_clause = or_(*[like_filters(t) for t in singles]) if singles else None
+    if must_clauses and should_clause is not None:
+        return and_(*must_clauses, should_clause)
+    if must_clauses:
+        return and_(*must_clauses)
+    if should_clause is not None:
+        return should_clause
+    # Defensive: never return a match-all here
+    return like_filters(query)
 
 def _merge_ai_and_user_keywords(ai_text: str, user_query: str) -> str:
     ai_tokens = _nlq_keywords(ai_text or "")
@@ -234,6 +297,203 @@ def _merge_ai_and_user_keywords(ai_text: str, user_query: str) -> str:
     if ai_compact and user_query:
         return f"{ai_compact} {user_query}"
     return ai_compact or user_query
+
+def _build_semantic_query(ai_q: str, ai_text: str) -> str:
+    toks = _nlq_keywords(ai_q)
+    phrases = [t for t in toks if " " in t][:2]
+    singles = [t for t in toks if " " not in t][:6]
+    core = " ; ".join(phrases) if phrases else " ".join(singles)
+    if not core:
+        core = (ai_q or "").strip()
+    return f"GST case law: {core}"
+
+# ---------- Vector helpers ----------
+def _detect_embedding_column_name():
+    env_name = (os.getenv("DB_EMBED_COL") or "").strip()
+    if env_name and hasattr(Acer.c, env_name):
+        print(f"[Vector] Using embedding column: {env_name} (from DB_EMBED_COL)")
+        return env_name
+    for nm in EMBED_COL_CANDIDATES:
+        if hasattr(Acer.c, nm):
+            print(f"[Vector] Using embedding column: {nm} (auto-detected)")
+            return nm
+    print("[Vector] No embedding column found. Set DB_EMBED_COL to your vector column name.")
+    return None
+
+# --- New Helper Function for Direct Vector Search (Clean Implementation) ---
+def _vector_search_direct(ai_q: str, base_filters: list, limit: int = 200, offset: int = 0) -> tuple[list[dict], int]:
+    """
+    Performs a direct vector similarity search.
+    1. Fetches candidates based on base_filters and non-null embedding.
+    2. Generates embedding for the user's query (ai_q).
+    3. Calculates cosine similarity for each candidate.
+    4. Applies VEC_ONLY_MIN threshold.
+    5. Sorts by similarity score (desc).
+    6. Returns a tuple: (paginated_results_list, total_count_of_filtered_results)
+    """
+    if not ai_q.strip():
+        return [], 0
+    # 1. Detect the embedding column name in the database table
+    embed_col_name = _detect_embedding_column_name()
+    if not embed_col_name:
+        print("[Vector Direct] Error: No embedding column detected.")
+        return [], 0
+    embed_col = getattr(Acer.c, embed_col_name)
+    # 2. Generate embedding for the user's natural language query
+    q_key = "search_embed_direct:" + hashlib.sha256(ai_q.encode("utf-8")).hexdigest()
+    q_vec = _ai_cache_get(q_key)
+    if q_vec is None:
+        q_vec = _openai_embed(ai_q) # Embed the raw user query
+        if q_vec is not None:
+            _ai_cache_set(q_key, q_vec, ttl_sec=1800) # Cache for 30 mins
+            print(f"[Vector Direct] Query embedding generated (len={len(q_vec)})")
+        else:
+            print("[Vector Direct] Error: Could not generate query embedding.")
+            return [], 0
+    # 3. Prepare database query to fetch candidates
+    #    Base filters from UI (should be empty if none selected)
+    #    + Mandatory check for non-null embedding column
+    where_conditions = [embed_col.isnot(None)] # Ensure row has an embedding
+    if base_filters:
+        where_conditions.extend(base_filters)
+    where_expr = and_(*where_conditions) if where_conditions else text("1=1")
+    # 4. Fetch candidate rows (data + embedding) from the database
+    with ENGINE.connect() as conn:
+        cols_to_select = _get_common_cols() + [embed_col] # Include embedding column
+        # Fetch all matching candidates (filtering/sorting happens in Python)
+        # Consider LIMITing if dataset is huge and this becomes a bottleneck
+        result_proxy = conn.execute(
+            select(*cols_to_select).where(where_expr).order_by(Acer.c.id.desc())
+        )
+        candidate_rows = result_proxy.mappings().all()
+    print(f"[Vector Direct] Fetched {len(candidate_rows)} candidate rows with embeddings.")
+    # 5. Score candidates using cosine similarity
+    scored_candidates = []
+    for row in candidate_rows:
+        db_embedding_data = row.get(embed_col_name)
+        if db_embedding_data is None:
+            continue # Defensive check
+        # Parse the stored embedding (JSON string -> list of floats)
+        db_vec = _parse_vec(db_embedding_data)
+        if db_vec is None:
+            # print(f"[Vector Direct] Warning: Could not parse embedding for row ID {row.get('id')}")
+            continue # Skip rows with unparsable embeddings
+        # Calculate similarity
+        similarity_score = _cosine(q_vec, db_vec)
+        # Apply minimum threshold early to reduce list size
+        if similarity_score >= VEC_ONLY_MIN:
+            row_dict = dict(row)
+            row_dict["_score"] = float(similarity_score)
+            scored_candidates.append(row_dict)
+    print(f"[Vector Direct] {len(scored_candidates)} candidates passed similarity threshold ({VEC_ONLY_MIN}).")
+    # 6. Sort candidates by similarity score descending
+    scored_candidates.sort(key=lambda x: x["_score"], reverse=True)
+    # 7. Calculate the total number of results BEFORE pagination
+    total_count = len(scored_candidates)
+    # 8. Apply pagination (offset and limit) to get the final page of results
+    paginated_results = scored_candidates[offset : offset + limit]
+    print(f"[Vector Direct] Returning {len(paginated_results)} results (offset={offset}, limit={limit}). Total available: {total_count}")
+    # Return the paginated results and the total count for correct pagination links
+    return paginated_results, total_count
+
+def _parse_vec(val):
+    """
+    Accept JSON array, Python list, or comma-separated string; return list[float] or None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, (list, tuple)):
+        try:
+            return [float(x) for x in val]
+        except Exception:
+            return None
+    if isinstance(val, (bytes, bytearray)):
+        try:
+            val = val.decode("utf-8", "ignore")
+        except Exception:
+            val = str(val)
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        # JSON array?
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                arr = json.loads(s)
+                if isinstance(arr, list):
+                    return [float(x) for x in arr]
+            except Exception:
+                pass
+        # CSV floats?
+        try:
+            parts = [p for p in re.split(r"[,\s]+", s) if p]
+            if len(parts) >= 8:  # guard tiny junk
+                return [float(p) for p in parts]
+        except Exception:
+            return None
+    return None
+
+def _cosine(a, b):
+    if not a or not b:
+        return 0.0
+    n = min(len(a), len(b))
+    dot = sum(a[i]*b[i] for i in range(n))
+    na = math.sqrt(sum(a[i]*a[i] for i in range(n)))
+    nb = math.sqrt(sum(b[i]*b[i] for i in range(n)))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+def _tokenize(text):
+    if not text: return set()
+    text = text.lower()
+    text = re.sub(r"[^\w\s\-]"," ", text)
+    return set(t for t in text.split() if t and (len(t) > 2 or t in _KEEP_SHORT))
+
+def _lexical_match_score(q_tokens, row):
+    """
+    Weighted lexical score over key fields:
+    - case_law_number (2.0)
+    - name_of_party    (1.5)
+    - subject_matter1/2(1.2 each)
+    - summary_head_note(1.0, cleaned)
+    Normalized to 0..1
+    """
+    if not q_tokens:
+        return 0.0
+    weights = {
+        "case_law_number": 2.0,
+        "name_of_party": 1.5,
+        "subject_matter1": 1.2,
+        "subject_matter2": 1.2,
+        "summary_head_note": 1.0,
+    }
+    fields = {}
+    fields["case_law_number"] = (row.get("case_law_number") or "")
+    fields["name_of_party"]   = (row.get("name_of_party") or "")
+    fields["subject_matter1"] = (row.get("subject_matter1") or "")
+    fields["subject_matter2"] = (row.get("subject_matter2") or "")
+    fields["summary_head_note"] = _strip_all_html(row.get("summary_head_note") or "")
+    # Tokenize fields
+    tokenized = {k: _tokenize(v) for k, v in fields.items()}
+    # Score presence
+    max_possible = sum(weights.values()) * len(q_tokens)
+    if max_possible == 0:
+        return 0.0
+    score = 0.0
+    for tok in q_tokens:
+        for fld, toks in tokenized.items():
+            if tok in toks:
+                score += weights[fld]
+    # Small bonus for digit sequences in case number appearing in query
+    if fields["case_law_number"]:
+        digits_in_case = re.findall(r"\d+", fields["case_law_number"])
+        for d in digits_in_case[:3]:
+            if d and d in " ".join(q_tokens):
+                score += 0.6
+                break
+    # Clamp
+    return max(0.0, min(1.0, score / (max_possible + 1e-9)))
 
 # ======================= TEXT CLEANERS =======================
 def _strip_all_html(html: str) -> str:
@@ -245,7 +505,7 @@ def _strip_all_html(html: str) -> str:
     text = soup.get_text(separator="\n")
     text = re.sub(r"\r\n?","\n", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\n{3,}", "\n", text)
     return text.strip()
 
 def _bold_held_and_prefix(head_txt: str) -> str:
@@ -308,16 +568,21 @@ def _clean_summary(text: str) -> str:
     if not text: return ""
     lines = []
     for ln in text.splitlines():
-        ln = re.sub(r'^\s*[\*\-•]+\s*', '', ln)
+        ln = re.sub(r'^\s*[\*\-\u2022\u00a0\u00a2]+\s*', '', ln) # Handle common bullet chars
         ln = re.sub(r'^\s*\d+\.\s*', '', ln)
         lines.append(ln)
     text = "\n".join(lines)
     text = re.sub(r'(?im)^\s*(overall|in summary|in conclusion|to conclude|in short)\b.*$', '', text)
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    text = re.sub(r'\n{3,}', '\n', text).strip()
     return text
 
-# ======================= AI EXPLANATION (DETAILED + NO CASE NAMES) =======================
+# ======================= AI EXPLANATION (ENHANCED: Statute + Circulars) =======================
+# ======================= AI EXPLANATION (DETAILED + NO CASE NAMES) - ENHANCED =======================
 def get_ai_explanation(prompt_text):
+    """
+    Generates the AI explanation for the statutory provisions.
+    Ensures only one attempt is made and provides clearer error feedback.
+    """
     args = request.args
     key_src = "|".join([
         "ai_explain_v3", (prompt_text or "").strip(),
@@ -331,8 +596,10 @@ def get_ai_explanation(prompt_text):
     cache_key = "ai_explain:" + hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _ai_cache_get(cache_key)
     if cached is not None:
+        print(f"[AI Explain] Cache HIT for key: {cache_key[:20]}...")
         return {"text": cached, "cached": True}
 
+    print(f"[AI Explain] Cache MISS for key: {cache_key[:20]}... Generating...")
     context_bits = []
     if args.getlist("section"): context_bits.append("Sections: " + ", ".join(args.getlist("section")))
     if args.getlist("rule"):    context_bits.append("Rules: " + ", ".join(args.getlist("rule")))
@@ -340,28 +607,236 @@ def get_ai_explanation(prompt_text):
     if args.getlist("s1"):      context_bits.append("Subject-1: " + ", ".join(args.getlist("s1")))
     if args.getlist("s2"):      context_bits.append("Subject-2: " + ", ".join(args.getlist("s2")))
     filter_context = (" | ".join(context_bits)) if context_bits else "General GST"
-
     full_prompt = (
         "You are an expert on Indian GST. Write 2–4 compact paragraphs that explain ONLY the statutory position: "
         "focus on CGST/IGST Acts, Rules, relevant Notifications and Circulars. "
         "Do NOT mention or invent ANY case names, parties, judges, or case citations. "
-        "NO bullet points, NO generic wrap-ups; just crisp paragraphs aligned to the query and filters.\n\n"
-        f"Filter Context: {filter_context}\n"
-        f"User Query: {(prompt_text or '').strip()}\n"
+        "NO bullet points, NO generic wrap-ups; just crisp paragraphs aligned to the query and filters. "
+        f"Filter Context: {filter_context} "
+        f"User Query: {(prompt_text or '').strip()} "
     )
+
+    # --- Single Attempt with Clear Error Handling ---
     try:
-        text = _openai_chat(
-            [
+        print(f"[AI Explain] Calling OpenAI API with model '{OPENAI_MODEL}'...")
+        start_time = time.time()
+        # Use only the primary OpenAI client method for clarity and single attempt
+        # Remove the fallback within this call to ensure one attempt
+        if not OPENAI_API_KEY:
+            raise RuntimeError("Missing OPENAI_API_KEY environment variable.")
+
+        from openai import OpenAI # Prefer the newer client
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
                 {"role": "system", "content": "You are a precise Indian GST legal analyst. Never cite or name cases; stick to sections, rules, notifications, circulars."},
                 {"role": "user", "content": full_prompt},
             ],
-            max_tokens=700, temperature=0.3,
+            max_tokens=700,
+            temperature=0.3,
         )
-        _ai_cache_set(cache_key, text, ttl_sec=900)
-        return {"text": text}
+        text = (resp.choices[0].message.content or "").strip()
+        elapsed_time = time.time() - start_time
+        print(f"[AI Explain] OpenAI API call successful (took {elapsed_time:.2f}s). Response length: {len(text)} chars.")
+        if text:
+            _ai_cache_set(cache_key, text, ttl_sec=900)
+            print(f"[AI Explain] Generated and cached result for key: {cache_key[:20]}...")
+            return {"text": text, "cached": False}
+        else:
+            error_msg = "OpenAI API returned an empty response."
+            print(f"[AI Explain] {error_msg}")
+            return {"error": error_msg}
+
     except Exception as e:
-        print("AI explain error:", e)
-        return {"error": f"{e}"}
+        # Catch any error during the API call or processing
+        error_msg = f"Failed to generate AI explanation: {str(e)}"
+        print(f"[AI Explain] ERROR: {error_msg}")
+        # Return the error message so it can be displayed in the template
+        return {"error": error_msg}
+
+    # --- This point should ideally not be reached ---
+    # But as a final fallback, return an error
+    error_msg = "An unexpected error occurred in AI explanation generation."
+    print(f"[AI Explain] UNEXPECTED FALLTHROUGH: {error_msg}")
+    return {"error": error_msg}
+# ======================= HYBRID AI SEARCH (vector + lexical + vector fallback) =======================
+# --- Keep the _get_common_cols and _run_query functions as they are ---
+def _get_common_cols():
+    return [
+        Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date,
+        Acer.c.summary_head_note,
+        Acer.c.type_of_court, Acer.c.state, Acer.c.year,
+        Acer.c.section, Acer.c.rule, Acer.c.citation,
+        Acer.c.subject_matter1, Acer.c.subject_matter2,
+    ]
+
+def _run_query(expr, add_cols=None, limit=200, offset=0):
+    cols = _get_common_cols()
+    if add_cols:
+        cols += add_cols
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            select(*cols).where(expr).order_by(Acer.c.id.desc()).limit(limit).offset(offset)
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+# --- Keep the _hybrid_rank function for potential future use or reference, but it's not called anymore in the AI search path ---
+def _hybrid_rank(ai_q: str, ai_text: str, base_filters):
+    """
+    Returns scored rows (list of dicts with '_score' added), already filtered by SCORE_MIN.
+    """
+    # Build merged text for lexical candidate recall
+    merged_search_text = _merge_ai_and_user_keywords(ai_text, ai_q)
+    # Detect embedding column
+    embed_col_name = _detect_embedding_column_name()
+    embed_col = getattr(Acer.c, embed_col_name) if embed_col_name else None
+    # Candidate set 1: NLQ on merged tokens (phrase-must + token-should)
+    where_expr_1 = and_(*(base_filters + [ _nlq_clause(merged_search_text) ])) if base_filters else _nlq_clause(merged_search_text)
+    add_cols = [embed_col] if embed_col is not None else []
+    cand = _run_query(where_expr_1, add_cols=add_cols, limit=CANDIDATE_PRIMARY)
+    # Candidate set 2 (wider): plain LIKE on raw query if too few
+    if len(cand) < 50:
+        where_expr_2 = and_(*(base_filters + [ like_filters(ai_q) ])) if base_filters else like_filters(ai_q)
+        cand2 = _run_query(where_expr_2, add_cols=add_cols, limit=CANDIDATE_WIDE)
+        # merge dedupe
+        seen = {c["id"] for c in cand}
+        for r in cand2:
+            if r["id"] not in seen:
+                cand.append(r); seen.add(r["id"])
+    # Prepare query embedding using key phrase(s)
+    sem_q = _build_semantic_query(ai_q, ai_text)
+    q_key = "embed:" + hashlib.sha256(sem_q.encode("utf-8")).hexdigest()
+    q_vec = _ai_cache_get(q_key)
+    if q_vec is None:
+        q_vec = _openai_embed(sem_q)
+        if q_vec is not None:
+            _ai_cache_set(q_key, q_vec, ttl_sec=1800)
+    # Vector-only fallback recall if lexical recall weak
+    if (not cand or len(cand) < 10) and embed_col is not None and q_vec is not None:
+        # Respect filters; scan a bounded slice for vector similarity
+        sweep_where = and_(*base_filters) if base_filters else text("1=1")
+        sweep_rows = _run_query(sweep_where, add_cols=[embed_col], limit=VECTOR_SWEEP_LIMIT, offset=0)
+        vec_hits = []
+        for r in sweep_rows:
+            rv = r.get(embed_col_name)
+            v = _parse_vec(rv)
+            if v:
+                sim = _cosine(q_vec, v)
+                if sim >= VEC_ONLY_MIN:
+                    rx = dict(r); rx["_vec_only_sim"] = float(sim)
+                    vec_hits.append(rx)
+        vec_hits.sort(key=lambda x: x["_vec_only_sim"], reverse=True)
+        vec_hits = vec_hits[:VECTOR_TOPK]
+        # merge into cand by id
+        seen = {c["id"] for c in cand}
+        for r in vec_hits:
+            if r["id"] not in seen:
+                cand.append(r); seen.add(r["id"])
+    # If still nothing found, bail
+    if not cand:
+        return []
+    q_tokens = set(_nlq_keywords(ai_q)) | _tokenize(ai_q)
+    scored = []
+    for r in cand:
+        # Vector similarity
+        vec_sim = 0.0
+        if q_vec is not None and embed_col_name:
+            rv = r.get(embed_col_name)
+            v = _parse_vec(rv)
+            if v:
+                vec_sim = _cosine(q_vec, v)
+        # Lexical score (weighted over case no, party, s1, s2, headnote)
+        lex = _lexical_match_score(q_tokens, r)
+        # Hybrid score
+        score = (W_VEC * vec_sim) + (W_LEX * lex)
+        # Drop ultra-low score rows unless we have very few candidates
+        if score >= SCORE_MIN or len(cand) <= 30:
+            rx = dict(r)
+            rx["_score"] = round(float(score), 6)
+            scored.append(rx)
+    # Sort by score desc, then id desc
+    scored.sort(key=lambda x: (x["_score"], x.get("id", 0)), reverse=True)
+    return scored
+
+def get_ai_explanation(prompt_text):
+    """
+    Generates a two-part AI explanation: Statutory Provisions and Circulars/Notifications.
+    Caches the combined result.
+    """
+    args = request.args
+    # Create a unique cache key based on the query and filters
+    # Removed filter context from cache key and prompt as requested
+    key_src = "|".join([
+        "ai_explain_modified_v1", (prompt_text or "").strip(),
+        # Filter context removed from cache key
+    ])
+    cache_key = "ai_explain_modified:" + hashlib.sha256(key_src.encode("utf-8")).hexdigest()
+    cached = _ai_cache_get(cache_key)
+    if cached is not None:
+        print(f"[AI Explain Modified] Cache HIT for key: {cache_key[:20]}...")
+        return cached # Return the cached dict directly
+
+    print(f"[AI Explain Modified] Cache MISS for key: {cache_key[:20]}... Generating...")
+
+    user_query = (prompt_text or '').strip()
+
+    # --- 1. Generate Statutory Provisions (Section A) ---
+    statute_prompt = (
+        "You are an expert on Indian GST. "
+        "Write ONLY the response in the following format:\n\n"
+        "A. Relevant Provisions\n"
+        "<Write 2-3 paragraphs strictly about the relevant CGST/IGST Acts and Rules related to the user's query. "
+        "Focus on sections and rules. Do NOT mention or invent ANY case names, parties, judges, or case citations. "
+        "NO bullet points, NO generic wrap-ups; just crisp paragraphs.>\n\n"
+        "B. Relevant Circulars/Notifications\n"
+        "<Write 2-3 paragraphs strictly about applicable GST Circulars and Notifications related to the user's query. "
+        "Mention specific circular/notification numbers and dates if known. "
+        "Do NOT mention or invent ANY case names, parties, judges, or case citations. "
+        "NO bullet points, NO generic wrap-ups; just crisp paragraphs.>\n\n"
+        "User Query: " + user_query
+    )
+
+    statute_text = ""
+    circular_text = ""
+    try:
+        # Use a single call to generate both parts as instructed
+        full_response = _openai_chat(
+            [
+                {"role": "system", "content": "You are a precise Indian GST legal analyst. Follow the exact output format requested by the user. Focus on statutory provisions and circulars/notifications. Never cite or name cases."},
+                {"role": "user", "content": statute_prompt},
+            ],
+            max_tokens=1200, temperature=0.3, # Increased tokens for two sections
+        )
+        full_response = full_response.strip()
+        # Simple parsing: Assume sections A and B are clearly marked
+        # Find the start of section B
+        section_b_index = full_response.find("B. Relevant Circulars/Notifications")
+        if section_b_index != -1:
+            statute_text = full_response[:section_b_index].replace("A. Relevant Provisions", "").strip()
+            circular_text = full_response[section_b_index + len("B. Relevant Circulars/Notifications"):].strip()
+        else:
+            # Fallback if parsing fails, assume whole response is statute part
+            statute_text = full_response
+            circular_text = "Explanation of relevant circulars and notifications could not be generated separately."
+
+    except Exception as e:
+        error_msg = f"Error generating AI explanation: {e}"
+        print(error_msg)
+        statute_text = f"Error generating statutory provisions: {e}"
+        circular_text = f"Error generating circulars/notifications: {e}"
+
+    # --- Cache and Return Result ---
+    result = {
+        "statute_text": statute_text,
+        "circular_text": circular_text,
+        "cached": False # Indicate it was just generated
+    }
+    _ai_cache_set(cache_key, result, ttl_sec=900) # Cache for 15 minutes
+    print(f"[AI Explain Modified] Generated and cached result for key: {cache_key[:20]}...")
+    return result
+
+# ... (previous code remains unchanged until the home route handler) ...
 
 # ======================= ROUTES =======================
 @app.get("/")
@@ -371,10 +846,8 @@ def home():
     rules      = _distinct("rule")
     parties    = _distinct("name_of_party")
     subjects   = _subjects_grouped()
-
     is_ai_search = request.args.get('ai_search') == 'true'
     ai_q = (request.args.get("ai_q") or "").strip() if is_ai_search else ""
-
     sel_industries = request.args.getlist("industry")
     sel_sections   = request.args.getlist("section")
     sel_rules      = request.args.getlist("rule")
@@ -382,20 +855,22 @@ def home():
     sel_s1         = request.args.getlist("s1")
     sel_s2         = request.args.getlist("s2")
     q_raw          = (request.args.get("q") or "").strip()
-
     results, total, pages = [], 0, 1
-    ai_response_data = None
+    # Initialize separate AI response components
+    ai_statute_text = ""
+    ai_circular_text = ""
+    ai_error = None # To capture any AI generation errors for display
 
-    COMMON_COLS = [
-        Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date,
-        Acer.c.summary_head_note,
-        Acer.c.type_of_court, Acer.c.state, Acer.c.year,
-        Acer.c.section, Acer.c.rule, Acer.c.citation,
-        Acer.c.subject_matter1, Acer.c.subject_matter2,
-    ]
+    # --- CHANGE 3: Increase per_page for AI search ---
+    # Set per_page based on search type
+    if is_ai_search:
+        per_page = 25 # Increased for AI search
+    else:
+        per_page = 10 # Standard search
+    # --- END CHANGE 3 ---
 
+    COMMON_COLS = _get_common_cols()
     page = max(int(request.args.get("page", 1) or 1), 1)
-    per_page = 10
     offset = (page - 1) * per_page
 
     def _run_expr(expr):
@@ -406,39 +881,136 @@ def home():
             ).mappings().all()
         return _total, [dict(r) for r in _rows]
 
-    # ---------- AI search ----------
+    # ---------- AI search (MODIFIED: Vector Similarity + AI Explanation) ----------
     if is_ai_search and ai_q:
-        ai_response_data = get_ai_explanation(ai_q)
-        ai_text = ai_response_data.get('text', '') if isinstance(ai_response_data, dict) else ''
-        merged_search_text = _merge_ai_and_user_keywords(ai_text, ai_q)
+        # --- CHANGE 1: Generate the Two-Part AI Explanation ---
+        try:
+            ai_explanation_data = get_ai_explanation(ai_q)
+            # Unpack the separate parts for the template
+            ai_statute_text = ai_explanation_data.get("statute_text", "")
+            ai_circular_text = ai_explanation_data.get("circular_text", "")
+            print(f"[Modified AI Search] Generated explanation for query: '{ai_q}'")
+        except Exception as e:
+            error_msg = f"Error generating AI explanation: {e}"
+            print(error_msg)
+            ai_error = error_msg # Store error to display in template
+            ai_statute_text = ""
+            ai_circular_text = ""
 
-        base_filters = []
-        if sel_industries: base_filters.append(Acer.c.industry_sector.in_(sel_industries))
-        if sel_sections:   base_filters.append(Acer.c.section.in_(sel_sections))
-        if sel_rules:      base_filters.append(Acer.c.rule.in_(sel_rules))
-        if sel_parties:    base_filters.append(Acer.c.name_of_party.in_(sel_parties))
-        if sel_s1:         base_filters.append(Acer.c.subject_matter1.in_(sel_s1))
-        if sel_s2:         base_filters.append(Acer.c.subject_matter2.in_(sel_s2))
+        # --- Vector Search Logic (Enhanced for Relevance - Addresses CHANGE 2) ---
+        print(f"[Vector AI Search] Processing query: '{ai_q}'")
+        # --- 1. Generate embedding for the user's query ---
+        q_key = "search_embed_ai_route:" + hashlib.sha256(ai_q.encode("utf-8")).hexdigest()
+        q_vec = _ai_cache_get(q_key)
+        if q_vec is None:
+            q_vec = _openai_embed(ai_q) # Embed the raw user query
+            if q_vec is not None:
+                _ai_cache_set(q_key, q_vec, ttl_sec=1800) # Cache for 30 mins
+                print(f"[Vector AI Search] Query embedding generated (len={len(q_vec)})")
+            else:
+                print("[Vector AI Search] Error: Could not generate query embedding.")
+                ai_error = ai_error + " Could not generate query vector." if ai_error else "Could not generate query vector."
+                results = []
+                total = 0
+                pages = 1
+                q_display = ai_q
+                # Proceed to render with error
 
-        # Try 1: NLQ over (AI tokens + user query)
-        where_expr = and_(*(base_filters + [ _nlq_clause(merged_search_text) ])) if base_filters else _nlq_clause(merged_search_text)
-        total, results = _run_expr(where_expr)
+        # --- 2. Proceed only if embedding was generated ---
+        if q_vec is not None:
+            # --- 3. Detect the embedding column name in the database table ---
+            embed_col_name = _detect_embedding_column_name() # Uses Acer table definition
+            if not embed_col_name:
+                print("[Vector AI Search] Error: No embedding column detected in acer_details.")
+                ai_error = ai_error + " No embedding column found in database." if ai_error else "No embedding column found in database."
+                results = []
+                total = 0
+                pages = 1
+                q_display = ai_q
+                # Proceed to render with error
+            else:
+                embed_col = getattr(Acer.c, embed_col_name)
+                print(f"[Vector AI Search] Using embedding column: {embed_col_name}")
 
-        # Try 2: NLQ over raw user query
-        if total == 0:
-            where_expr = and_(*(base_filters + [ _nlq_clause(ai_q) ])) if base_filters else _nlq_clause(ai_q)
-            total, results = _run_expr(where_expr)
+                # --- 4. Build base filters from UI selections ---
+                # --- CHANGE 2 Enhancement: Stricter filtering ---
+                # Ensure candidate rows have embeddings and match UI filters.
+                # Consider increasing VEC_ONLY_MIN if random results persist.
+                base_filters = [embed_col.isnot(None)] # Mandatory: ensure row has an embedding
+                if sel_industries: base_filters.append(Acer.c.industry_sector.in_(sel_industries))
+                if sel_sections:   base_filters.append(Acer.c.section.in_(sel_sections))
+                if sel_rules:      base_filters.append(Acer.c.rule.in_(sel_rules))
+                if sel_parties:    base_filters.append(Acer.c.name_of_party.in_(sel_parties))
+                if sel_s1:         base_filters.append(Acer.c.subject_matter1.in_(sel_s1))
+                if sel_s2:         base_filters.append(Acer.c.subject_matter2.in_(sel_s2))
 
-        # Try 3: Simple LIKE over raw user query
-        if total == 0:
-            where_expr = and_(*(base_filters + [ like_filters(ai_q) ])) if base_filters else like_filters(ai_q)
-            total, results = _run_expr(where_expr)
+                where_expr = and_(*base_filters) if base_filters else embed_col.isnot(None)
+                print(f"[Vector AI Search] Base filters applied (including non-null embedding check).")
 
-        pages = (total // per_page) + (1 if total % per_page else 0)
-        q_display = ai_q  # ensures results block renders even in AI mode
+                # --- 5. Fetch candidate rows (data + embedding) from the database ---
+                with ENGINE.connect() as conn:
+                    cols_to_select = _get_common_cols() + [embed_col] # Include embedding column
+                    # Fetch candidates based on filters. Sorting happens in Python.
+                    result_proxy = conn.execute(
+                        select(*cols_to_select).where(where_expr).order_by(Acer.c.id.desc())
+                    )
+                    candidate_rows = result_proxy.mappings().all()
+                print(f"[Vector AI Search] Fetched {len(candidate_rows)} candidate rows with embeddings.")
 
-    # ---------- Standard search (with fallback NLQ -> LIKE) ----------
+                # --- 6. Score candidates using cosine similarity ---
+                scored_candidates = []
+                for row in candidate_rows:
+                    db_embedding_data = row.get(embed_col_name)
+                    if db_embedding_data is None:
+                        continue # Defensive check
+                    # Parse the stored embedding (JSON string -> list of floats)
+                    db_vec = _parse_vec(db_embedding_data)
+                    if db_vec is None:
+                        continue # Skip rows with unparsable embeddings
+                    # Calculate similarity
+                    similarity_score = _cosine(q_vec, db_vec)
+                    # --- CHANGE 2 Core: Apply threshold to filter relevance ---
+                    # Only add candidates that meet or exceed the minimum similarity.
+                    # If VEC_ONLY_MIN is too low, increase it (e.g., from 0.15 to 0.20 or 0.25).
+                    # Ensure VEC_ONLY_MIN is defined in your config (e.g., at the top or via env var).
+                    if similarity_score >= VEC_ONLY_MIN:
+                        row_dict = dict(row)
+                        row_dict["_score"] = float(similarity_score)
+                        scored_candidates.append(row_dict)
+                print(f"[Vector AI Search] {len(scored_candidates)} candidates passed similarity threshold ({VEC_ONLY_MIN}).")
+
+                # --- 7. Sort candidates by similarity score descending ---
+                scored_candidates.sort(key=lambda x: x["_score"], reverse=True)
+
+                # --- 8. Calculate the total number of results BEFORE pagination ---
+                total_count = len(scored_candidates)
+
+                # --- CHANGE 2 Final Check & CHANGE 3: Apply pagination ---
+                # If no scored candidates, results remain empty, preventing random display.
+                if total_count > 0:
+                    # Apply pagination (offset and limit) to get the final page of results
+                    paginated_results = scored_candidates[offset : offset + per_page] # Use updated per_page
+                    print(f"[Vector AI Search] Returning {len(paginated_results)} results (offset={offset}, limit={per_page}). Total available: {total_count}")
+
+                    # Prepare data for template
+                    results = [ {k:v for k,v in r.items() if k != "_score"} for r in paginated_results ]
+                    total = total_count # Use the total count for correct pagination
+                    pages = max(1, (total // per_page) + (1 if total % per_page else 0))
+                else:
+                    print(f"[Vector AI Search] No candidates met the similarity threshold ({VEC_ONLY_MIN}). Returning no results.")
+                    results = []
+                    total = 0
+                    pages = 1 # Or could be 0, depending on template logic
+
+        # Set q_display to ai_q so the template knows it's an AI search mode
+        q_display = ai_q
+
+    # ---------- Standard search (unchanged) ----------
     elif q_raw or any([sel_industries, sel_sections, sel_rules, sel_parties, sel_s1, sel_s2]):
+        # Reset per_page to standard if not AI search (redundant, but clear)
+        per_page = 10
+        offset = (page - 1) * per_page
+
         base_filters = []
         if sel_industries: base_filters.append(Acer.c.industry_sector.in_(sel_industries))
         if sel_sections:   base_filters.append(Acer.c.section.in_(sel_sections))
@@ -446,12 +1018,10 @@ def home():
         if sel_parties:    base_filters.append(Acer.c.name_of_party.in_(sel_parties))
         if sel_s1:         base_filters.append(Acer.c.subject_matter1.in_(sel_s1))
         if sel_s2:         base_filters.append(Acer.c.subject_matter2.in_(sel_s2))
-
         if q_raw:
             # First: NLQ
             where_expr = and_(*(base_filters + [ _nlq_clause(q_raw) ])) if base_filters else _nlq_clause(q_raw)
             total, results = _run_expr(where_expr)
-
             # Fallback: plain LIKE if NLQ found 0
             if total == 0:
                 where_expr = and_(*(base_filters + [ like_filters(q_raw) ])) if base_filters else like_filters(q_raw)
@@ -459,24 +1029,23 @@ def home():
         else:
             where_expr = and_(*base_filters) if base_filters else text("1=1")
             total, results = _run_expr(where_expr)
-
         pages = (total // per_page) + (1 if total % per_page else 0)
         q_display = q_raw
     else:
         q_display = ""
 
-    # Pagination links
+    # Pagination links (mostly unchanged, but uses potentially updated per_page logic)
     def page_url(n):
         params = {
             'industry': sel_industries, 'section': sel_sections, 'rule': sel_rules,
             'party': sel_parties, 's1': sel_s1, 's2': sel_s2, 'page': n
         }
-        if is_ai_search:
-            params['ai_search'] = 'true'; params['ai_q'] = ai_q
+        if is_ai_search and ai_q: # Pass ai_search and ai_q for AI search pagination
+            params['ai_search'] = 'true'
+            params['ai_q'] = ai_q
         else:
             params['q'] = q_raw
         return url_for("home", **params)
-
     window = 10
     start = max(1, page - (window // 2))
     end = min(pages, start + window - 1)
@@ -485,6 +1054,7 @@ def home():
     prev_url = page_url(page - 1) if page > 1 else None
     next_url = page_url(page + 1) if page < pages else None
 
+    # Pass the separate AI text parts and potential error to the template
     return render_template(
         "index.html",
         industries=industries, sections=sections, rules=rules, parties=parties, subjects=subjects,
@@ -494,8 +1064,15 @@ def home():
         q=q_display,
         results=results, page=page, pages=pages, total=total,
         page_urls=page_urls, prev_url=prev_url, next_url=next_url,
-        ai_response=ai_response_data, ai_q=ai_q
+        # Pass the new separate AI explanation parts
+        ai_statute_text=ai_statute_text,
+        ai_circular_text=ai_circular_text,
+        ai_error=ai_error, # Pass any AI error for display
+        ai_q=ai_q # Keep passing ai_q if needed by template logic
     )
+
+# ... (rest of the code like /case/<int:rid>, /summarize_results, admin routes, etc. remains unchanged) ...
+
 
 # --------- Public case detail ---------
 @app.get("/case/<int:rid>")
@@ -504,14 +1081,12 @@ def public_case_detail(rid: int):
         row = conn.execute(select(Acer).where(Acer.c.id == rid)).mappings().first()
     if not row: abort(404)
     r = dict(row)
-
     head_plain = _strip_all_html(r.get("summary_head_note") or "")
     headnotes_html = _bold_held_and_prefix(head_plain)
     qa_plain   = _strip_all_html(r.get("question_answered") or "")
     qa_items   = _split_points(qa_plain)
     citations_text = _strip_all_html(r.get("citation") or "")
     full_case_html = r.get("full_case_law") or ""
-
     args = request.args
     sel_industries = args.getlist("industry")
     sel_sections   = args.getlist("section")
@@ -520,7 +1095,6 @@ def public_case_detail(rid: int):
     sel_s1         = args.getlist("s1")
     sel_s2         = args.getlist("s2")
     q              = (args.get("q") or "").strip()
-
     clauses = []
     if sel_industries: clauses.append(Acer.c.industry_sector.in_(sel_industries))
     if sel_sections:   clauses.append(Acer.c.section.in_(sel_sections))
@@ -530,14 +1104,12 @@ def public_case_detail(rid: int):
     if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
     if q:              clauses.append(_nlq_clause(q))
     where_expr = and_(*clauses) if clauses else text("1=1")
-
     with ENGINE.connect() as conn:
         rows = conn.execute(
             select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
             .where(where_expr).order_by(Acer.c.id.desc())
         ).mappings().all()
     list_results = [dict(x) for x in rows]
-
     return render_template(
         "public_case_detail.html",
         r=r, headnotes_html=headnotes_html, full_case_html=full_case_html,
@@ -565,7 +1137,6 @@ def _fetch_rows_for_current_filters(args, cap=60):
     sel_s1         = args.getlist("s1")
     sel_s2         = args.getlist("s2")
     q              = (args.get("q") or "").strip()
-
     clauses = []
     if sel_industries: clauses.append(Acer.c.industry_sector.in_(sel_industries))
     if sel_sections:   clauses.append(Acer.c.section.in_(sel_sections))
@@ -578,7 +1149,6 @@ def _fetch_rows_for_current_filters(args, cap=60):
     elif q:
         clauses.append(_nlq_clause(q))
     where_expr = and_(*clauses) if clauses else text("1=1")
-
     with ENGINE.connect() as conn:
         cols = [
             Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date,
@@ -617,28 +1187,23 @@ def summarize_results():
         rows = _fetch_rows_for_current_filters(request.args, cap=20)
         if not rows:
             return jsonify({"ok": False, "message": "No case law results to summarize for the current filters."})
-
         topic = _selected_topic(request.args)
         docs  = _build_llm_docs(rows)
-
         snippets = "\n".join(
-            f"- Case: {d['case_no']} — {d['party']} ({d.get('year','')}) | Court: {d.get('court','')} | State: {d.get('state','')}\n"
+            f"- Case: {d['case_no']} – {d['party']} ({d.get('year','')}) | Court: {d.get('court','')} | State: {d.get('state','')}\n"
             f"  Headnote: {d['headnote_clean']}"
             for d in docs
         )
         user_prompt = f"""
 Topic: {topic}
 Instruction: Write 2–4 tight paragraphs strictly about the Topic. Base only on these headnotes; ignore unrelated material.
-Cite 3–6 cases inline as [{{case_no}} — {{party}} ({{year}})]. No bullet points; paragraphs only. No generic wrap-ups.
-
+Cite 3–6 cases inline as [{{case_no}} – {{party}} ({{year}})]. No bullet points; paragraphs only. No generic wrap-ups.
 Snippets:
 {snippets}
-
 Return JSON with keys:
 - answer: string (plain text paragraphs, no bullets)
 - citations: array of case ids used (from the input 'id')
 """
-
         data = _openai_chat_json(
             [
                 {"role": "system", "content":
@@ -647,15 +1212,11 @@ Return JSON with keys:
             ],
             model="gpt-4o-mini", max_tokens=900, temperature=0.3
         )
-
         answer    = _clean_summary((data or {}).get("answer", ""))
         citations = (data or {}).get("citations", [])
-
         if not answer.strip():
             return jsonify({"ok": False, "message": "The model returned an empty summary. Try refining filters and retry."})
-
         return jsonify({"ok": True, "summary": answer, "citations": citations})
-
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
 
@@ -760,6 +1321,7 @@ _SYNONYMS = {
     "question answered":"question_answered","questions answered":"question_answered",
     "full case law":"full_case_law","full text":"full_case_law"
 }
+
 def _simp(s:str)->str:
     return re.sub(r"[^a-z0-9]+"," ", (s or "").strip().lower()).strip()
 
@@ -828,7 +1390,6 @@ def admin_bulk_upload():
             </form>
             """
             return render_template_string(html)
-
     f = request.files.get("file")
     if not f or not getattr(f, "filename", ""):
         flash("No file selected.", "err")
@@ -838,7 +1399,6 @@ def admin_bulk_upload():
     if ext not in ALLOWED_UPLOADS:
         flash("Unsupported file type. Please upload .xlsx, .xls or .csv", "err")
         return redirect(url_for("admin_bulk_upload"))
-
     try:
         data = f.read()
         if ext in {".xlsx",".xls"}:
@@ -848,20 +1408,16 @@ def admin_bulk_upload():
     except Exception as e:
         flash(f"Failed to read file: {e}", "err")
         return redirect(url_for("admin_bulk_upload"))
-
     if df.empty:
         flash("Uploaded file is empty.", "err")
         return redirect(url_for("admin_bulk_upload"))
-
     df = _normalize_columns(df)
     if df.empty:
         flash("No recognizable columns found. Use the template headers.", "err")
         return redirect(url_for("admin_bulk_upload"))
-
     df = _coerce_types(df)
     if len(df) > 5000:
         df = df.iloc[:5000, :]
-
     records = []
     for _, row in df.iterrows():
         rec = {}
@@ -872,18 +1428,15 @@ def admin_bulk_upload():
                 rec[c] = v
         if any(v not in (None, "") for v in rec.values()):
             records.append(rec)
-
     if not records:
         flash("No valid rows to insert.", "err")
         return redirect(url_for("admin_bulk_upload"))
-
     try:
         with ENGINE.begin() as conn:
             conn.execute(insert(Acer), records)
     except Exception as e:
         flash(f"Insert failed: {e}", "err")
         return redirect(url_for("admin_bulk_upload"))
-
     flash(f"Uploaded and inserted {len(records)} row(s).", "ok")
     return redirect(url_for("admin_caselaws"))
 
