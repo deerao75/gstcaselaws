@@ -1387,7 +1387,6 @@ def admin_new_case():
     empty["id"] = ""
     return render_template("admin_edit.html", r=empty, mode="new")
 
-# ---- EXPORT CSV (primary) ----
 @app.get("/admin/export_csv")
 def admin_export_csv():
     cols = [getattr(Acer.c, c) for c in ALL_COLS if hasattr(Acer.c, c)]
