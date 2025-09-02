@@ -1276,24 +1276,80 @@ Return JSON with keys:
 def admin_root():
     return redirect(url_for("admin_caselaws"))
 
-@app.get("/admin/caselaws")
-def admin_caselaws():
-    q = (request.args.get("q") or "").strip()
-    page = max(int(request.args.get("page", 1)), 1)
-    per_page = min(max(int(request.args.get("per_page", 20)), 1), 200)
-    offset = (page - 1) * per_page
-    where_clause = _nlq_clause(q) if q else text("1=1")
-    with ENGINE.connect() as conn:
-        total = conn.execute(select(func.count()).select_from(Acer).where(where_clause)).scalar_one()
-        rows = conn.execute(
-            select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date, Acer.c.state)
-            .where(where_clause).order_by(Acer.c.id.desc()).limit(per_page).offset(offset)
-        ).mappings().all()
-    return render_template(
-        "admin_caselaws.html",
-        rows=rows, page=page, per_page=per_page, total=total, q=q, table_name=TABLE_NAME
-    )
+@app.route("/admin/caselaws/new", methods=["GET", "POST"])
+def admin_new_case():
+    if request.method == "POST":
+        data = {}
+        # --- Potential Fix: Add validation/checks ---
+        errors = []
+        for col in ALL_COLS:
+            if col == "id": continue
+            # Get the value, defaulting to None or empty string if not found
+            # request.form.get(col) returns None if key is missing, but the 'if col in request.form' prevents that path.
+            # It returns the actual value (possibly empty string "") if key exists.
+            value = request.form.get(col)
 
+            # Example validation: Check for required fields (adjust the list as needed)
+            # Replace ['case_law_number', 'name_of_party'] with your actual required columns
+            required_fields = ['case_law_number', 'name_of_party'] # Example
+            if col in required_fields and not value:
+                 errors.append(f"Field '{col}' is required.")
+                 # Or handle it differently, like setting a default
+                 # data[col] = "Unknown" # Example default
+
+            # Example: Handle potential type conversion for 'year' if needed explicitly
+            # (Database driver often handles this, but explicit check can help)
+            # if col == 'year' and value:
+            #     try:
+            #         data[col] = int(value)
+            #     except ValueError:
+            #         errors.append(f"Invalid year format for '{col}': {value}")
+            #         # Decide how to handle invalid data - maybe skip, set default, or return error
+            # elif col == 'year' and not value:
+            #      # Decide if NULL/None is acceptable for year in DB, or set default
+            #      # data[col] = None # Or some default like datetime.now().year if appropriate
+            #      pass # Let it be empty/None if DB allows
+
+            # Only add non-empty values, or decide based on your DB schema
+            # If DB allows NULL, you might want to add even empty values
+            # If DB requires a value, ensure it's present before this step
+            # This current logic adds the key if it was in the form, regardless of value content.
+            # You might need to refine this.
+            # Example: Only add if value is not None and not an empty string
+            # if value is not None and value != "":
+            #     data[col] = value
+            # Or, add it regardless (current logic, might cause issues if DB field is NOT NULL and value is empty string)
+            else:
+                 data[col] = value
+
+        # --- End Potential Fix ---
+
+        # --- Check for validation errors ---
+        if errors:
+            # Flash errors and re-render the form
+            for error in errors:
+                flash(error, "err")
+            # Pass the submitted data back to the template to avoid re-typing everything
+            return render_template("admin_edit.html", r=data, mode="new"), 400 # 400 Bad Request might be appropriate
+
+        # --- Proceed with insertion if no validation errors ---
+        try: # Add a try-except block to catch database errors
+            with ENGINE.begin() as conn:
+                conn.execute(insert(Acer).values(**data))
+            flash("New case added.", "ok")
+            return redirect(url_for("admin_caselaws"))
+        except Exception as e: # Catch database errors
+            # Log the error (print to console or use logging module)
+            print(f"Database Insert Error: {e}")
+            # Flash a user-friendly message
+            flash(f"Error saving case: {str(e)}", "err") # Or a generic message
+            # Re-render the form with the submitted data
+            return render_template("admin_edit.html", r=data, mode="new"), 500 # 500 Internal Server Error
+
+    # Handle GET request (show the form)
+    empty = {c: "" for c in ALL_COLS}
+    empty["id"] = ""
+    return render_template("admin_edit.html", r=empty, mode="new")
 @app.route("/admin/caselaws/<int:rid>/edit", methods=["GET", "POST"])
 def admin_edit_case(rid: int):
     with ENGINE.connect() as conn:
