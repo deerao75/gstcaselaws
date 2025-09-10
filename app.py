@@ -7,7 +7,6 @@ from werkzeug.utils import secure_filename
 import os, re, io, ssl, json, time, hashlib, math
 import pandas as pd
 from collections import defaultdict
-from datetime import date, datetime
 
 # ======================= FLASK & UPLOAD CONFIG =======================
 app = Flask(__name__)
@@ -1479,76 +1478,94 @@ def admin_bulk_template():
 def admin_bulk_template_alias():
     return admin_bulk_template()
 
-@app.route("/admin/bulk_upload", methods=["GET","POST"])
+@app.route("/admin/bulk_upload", methods=["GET", "POST"])
 def admin_bulk_upload():
     if request.method == "GET":
-        try:
-            return render_template("admin_bulk_upload.html")
-        except Exception:
-            html = """
-            <h2>Bulk Upload Case Laws (Excel/CSV)</h2>
-            <p>Accepted: .xlsx, .xls, .csv</p>
-            <p>
-              <a href="{{ url_for('admin_bulk_template') }}">Download Upload Template</a> |
-              <a href="{{ url_for('admin_bulk_download') }}">Bulk Download All Cases</a>
-            </p>
-            <form method="post" enctype="multipart/form-data">
-              <input type="file" name="file" required>
-              <button type="submit">Upload</button>
-              <a href="{{ url_for('admin_caselaws') }}">Back to Admin</a>
-            </form>
-            """
-            return render_template_string(html)
-    f = request.files.get("file")
-    if not f or not getattr(f, "filename", ""):
+        return redirect(url_for("admin_caselaws"))
+
+    if 'file' not in request.files:
+        flash("No file part in request.", "err")
+        return redirect(url_for("admin_caselaws"))
+
+    f = request.files['file']
+    if not f or f.filename == '':
         flash("No file selected.", "err")
-        return redirect(url_for("admin_bulk_upload"))
+        return redirect(url_for("admin_caselaws"))
+
     filename = secure_filename(f.filename)
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in ALLOWED_UPLOADS:
-        flash("Unsupported file type. Please upload .xlsx, .xls or .csv", "err")
-        return redirect(url_for("admin_bulk_upload"))
+    if ext not in {".xlsx", ".xls", ".csv"}:
+        flash("Unsupported file type. Please upload .xlsx, .xls, or .csv", "err")
+        return redirect(url_for("admin_caselaws"))
+
     try:
         data = f.read()
-        if ext in {".xlsx",".xls"}:
+        if ext in {".xlsx", ".xls"}:
             df = pd.read_excel(io.BytesIO(data))
         else:
             df = pd.read_csv(io.BytesIO(data))
     except Exception as e:
         flash(f"Failed to read file: {e}", "err")
-        return redirect(url_for("admin_bulk_upload"))
+        return redirect(url_for("admin_caselaws"))
+
     if df.empty:
         flash("Uploaded file is empty.", "err")
-        return redirect(url_for("admin_bulk_upload"))
-    df = _normalize_columns(df)
-    if df.empty:
-        flash("No recognizable columns found. Use the template headers.", "err")
-        return redirect(url_for("admin_bulk_upload"))
+        return redirect(url_for("admin_caselaws"))
+
+    # Normalize column names: clean and map using _SYNONYMS
+    def clean_key(s):
+        return re.sub(r"\s+", " ", s.strip().lower())
+
+    col_mapping = {}
+    synonym_keys = {clean_key(k): v for k, v in _SYNONYMS.items()}
+
+    for col in df.columns:
+        c = clean_key(col)
+        if c in synonym_keys:
+            col_mapping[col] = synonym_keys[c]
+        elif c.replace(" ", "_") in _TEMPLATE_COLUMNS:
+            # Direct match via snake_case
+            mapped = c.replace(" ", "_")
+            if mapped in _TEMPLATE_COLUMNS:
+                col_mapping[col] = mapped
+        elif c in [x.lower() for x in _TEMPLATE_COLUMNS]:
+            # Exact case-insensitive match
+            orig = [x for x in _TEMPLATE_COLUMNS if x.lower() == c][0]
+            col_mapping[col] = orig
+
+    if not col_mapping:
+        flash("No valid columns found. Please use correct column names.", "err")
+        return redirect(url_for("admin_caselaws"))
+
+    df = df.rename(columns=col_mapping)
+
+    # Keep only columns present in database
+    df = df[[c for c in _TEMPLATE_COLUMNS if c in df.columns]]
+
+    # Coerce types
     df = _coerce_types(df)
-    if len(df) > 5000:
-        df = df.iloc[:5000, :]
-    records = []
-    for _, row in df.iterrows():
-        rec = {}
-        for c in _TEMPLATE_COLUMNS:
-            if c in df.columns:
-                v = row[c]
-                if pd.isna(v): v = None
-                rec[c] = v
-        if any(v not in (None, "") for v in rec.values()):
-            records.append(rec)
+
+    # Replace NaN with None for SQL NULL
+    records = df.where(pd.notnull(df), None).to_dict("records")
+
     if not records:
-        flash("No valid rows to insert.", "err")
-        return redirect(url_for("admin_bulk_upload"))
+        flash("No data to insert.", "err")
+        return redirect(url_for("admin_caselaws"))
+
     try:
         with ENGINE.begin() as conn:
+            # Delete existing rows with same case_law_number
+            case_numbers = [r["case_law_number"] for r in records if r["case_law_number"] is not None]
+            if case_numbers:
+                conn.execute(delete(Acer).where(Acer.c.case_law_number.in_(case_numbers)))
+            # Insert new data
             conn.execute(insert(Acer), records)
     except Exception as e:
-        flash(f"Insert failed: {e}", "err")
-        return redirect(url_for("admin_bulk_upload"))
-    flash(f"Uploaded and inserted {len(records)} row(s).", "ok")
-    return redirect(url_for("admin_caselaws"))
+        flash(f"Database insert failed: {e}", "err")
+        return redirect(url_for("admin_caselaws"))
 
+    flash(f"Successfully uploaded {len(records)} row(s). Duplicates were overwritten.", "ok")
+    return redirect(url_for("admin_caselaws"))
 # ======================= Contact =======================
 @app.route("/contact", methods=["GET", "POST"])
 def contact():
