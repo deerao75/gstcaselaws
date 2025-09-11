@@ -15,11 +15,9 @@
 }
 .nav-btn:hover, .nav-link:hover{ background:#f5f5f5; }
 .nav-link.active{ border-color:#000; background:#f0f0f0; font-weight:500; }
-
 .main{ background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; }
 .panel{ display:none; }
 .panel.show{ display:block; }
-
 .form-group{ margin-bottom:12px; }
 .form-group label{ display:block; margin-bottom:4px; font-size:14px; font-weight:500; }
 .form-input, .form-text{
@@ -27,11 +25,9 @@
   font-size:14px; box-sizing:border-box;
 }
 .form-text{ height:120px; resize:vertical; }
-
 .form-grid{
   display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;
 }
-
 .btn{
   padding:8px 12px; border:none; background:#f0f0f0; border-radius:6px;
   font-size:14px; cursor:pointer;
@@ -44,7 +40,6 @@
 .btn-danger{ background:#ef4444; color:#fff; }
 .btn-danger:hover{ background:#dc2626; }
 .btn-ghost{ background:transparent; border:1px solid #ddd; }
-
 table{ width:100%; border-collapse:collapse; font-size:14px; }
 table th, table td{ padding:10px; text-align:left; border-bottom:1px solid #eee; }
 table th{ font-weight:500; background:#fafafa; }
@@ -55,118 +50,64 @@ table th{ font-weight:500; background:#fafafa; }
 .nowrap{ white-space:nowrap; }
 .muted{ color:#666; text-align:center; padding:20px 0; }
 .pill{ background:#e0e0e0; padding:4px 10px; border-radius:12px; font-size:12px; }
-
 .sheet-toolbar{ margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap; }
 .rich-wrap{ border:1px solid #ddd; border-radius:6px; overflow:hidden; }
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+  background-color: #f9fafb;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.stats-table th, .stats-table td {
+  padding: 12px 15px;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+.stats-table th {
+  background-color: #f3f4f6;
+  font-weight: 600;
+  color: #374151;
+}
+.stats-table tr:last-child td {
+  border-bottom: none;
+}
+.stats-table .count-cell {
+  text-align: right;
+  font-weight: 500;
+}
+.search-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.search-row input[type="text"] {
+  flex: 1;
+  min-width: 200px;
+}
+.search-row .btn {
+  flex-shrink: 0;
+}
+.search-row > * {
+  margin: 5px 0;
+}
 </style>
-
 <section class="admin-wrap">
   <!-- LEFT MENU -->
   <aside class="side">
     <h3>Manage Case Laws</h3>
-    <button class="nav-btn" data-target="#panel-add">➕ Add New</button>
+    <!-- Removed Add New button as requested -->
     <a class="nav-link {% if mode=='edit' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=edit">✏️ Edit</a>
     <a class="nav-link {% if mode=='delete' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=delete">🗑️ Delete</a>
     <a class="nav-link" id="bulkDownloadLink" href="{{ url_for('admin_export_csv') }}">⬇️ Bulk Download</a>
     <a class="nav-link" id="bulkUploadLink" href="javascript:void(0)" onclick="document.getElementById('panel-bulkupload').classList.add('show'); document.querySelectorAll('.panel').forEach(p => p !== document.getElementById('panel-bulkupload') && p.classList.remove('show'));">⬆️ Bulk Upload</a>
   </aside>
-
   <!-- RIGHT CONTENT -->
   <div class="main">
-
-    <!-- ADD NEW -->
-    <div id="panel-add" class="panel"><div class="card">
-      <h2 style="margin:0 0 8px 0;">Add New Case Law</h2>
-      <div class="box">
-        <form method="post" action="{{ url_for('admin_new_case') }}">
-          <div class="form-grid">
-            <div class="form-group">
-              <label>Case Law Number</label>
-              <input class="form-input" type="text" name="case_law_number">
-            </div>
-            <div class="form-group">
-              <label>Name of the Party</label>
-              <input class="form-input" type="text" name="name_of_party">
-            </div>
-            <div class="form-group">
-              <label>Date</label>
-              <input class="form-input" type="date" name="date">
-            </div>
-            <div class="form-group">
-              <label>State</label>
-              <input class="form-input" type="text" name="state">
-            </div>
-            <div class="form-group">
-              <label>Year</label>
-              <input class="form-input" type="number" name="year" min="1947" max="{{ self_year }}">
-            </div>
-            <div class="form-group">
-              <label>Type of Court</label>
-              <input class="form-input" type="text" name="type_of_court">
-            </div>
-            <div class="form-group">
-              <label>Industry</label>
-              <input class="form-input" type="text" name="industry_sector">
-            </div>
-            <div class="form-group">
-              <label>Section</label>
-              <input class="form-input" type="text" name="section">
-            </div>
-            <div class="form-group">
-              <label>Rules</label>
-              <input class="form-input" type="text" name="rule">
-            </div>
-            <div class="form-group">
-              <label>Subject Matter 1</label>
-              <input class="form-input" type="text" name="subject_matter1">
-            </div>
-            <div class="form-group">
-              <label>Subject Matter 2</label>
-              <input class="form-input" type="text" name="subject_matter2">
-            </div>
-            <div class="form-group">
-              <label>Case Name</label>
-              <input class="form-input" type="text" name="case_name">
-            </div>
-            <div class="form-group">
-              <label>Citations</label>
-              <input class="form-input" type="text" name="citation">
-            </div>
-            <div class="form-group">
-              <label>Basic Details</label>
-              <input class="form-input" type="text" name="basic_detail">
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Head Notes</label>
-            <div class="rich-wrap">
-              <textarea name="summary_head_note" class="form-text"></textarea>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Question Answered</label>
-            <div class="rich-wrap">
-              <textarea name="question_answered" class="form-text"></textarea>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Full Case Law</label>
-            <div class="rich-wrap">
-              <textarea name="full_case_law" class="form-text"></textarea>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Link to Full Case Law</label>
-            <input class="form-input" type="url" name="link">
-          </div>
-          <div style="margin-top:14px;">
-            <button class="btn btn-orange" type="submit">Save Case Law</button>
-            <button class="btn btn-ghost" type="button" onclick="document.getElementById('panel-add').classList.remove('show')">Cancel</button>
-          </div>
-        </form>
-      </div>
-    </div></div>
-
+    <!-- ADD NEW PANEL REMOVED -->
     <!-- EDIT -->
     {% if edit_item %}
     <div id="panel-edit" class="panel show"><div class="card">
@@ -261,7 +202,6 @@ table th{ font-weight:500; background:#fafafa; }
       </div>
     </div></div>
     {% endif %}
-
     <!-- BULK UPLOAD (File Input) -->
     <div id="panel-bulkupload" class="panel">
       <div class="card">
@@ -281,7 +221,6 @@ table th{ font-weight:500; background:#fafafa; }
         </div>
       </div>
     </div>
-
     <!-- SEARCH -->
     <div id="panel-search" class="panel {% if not edit_item and mode!='delete' %}show{% endif %}">
       <div class="card">
@@ -297,6 +236,39 @@ table th{ font-weight:500; background:#fafafa; }
             {% if q %}<span class="pill">Filtered</span>{% endif %}
           </div>
         </form>
+
+        <!-- Statistics Table -->
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th class="count-cell">Count</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Total Case Laws</td>
+              <td class="count-cell">{{ total_case_laws }}</td>
+            </tr>
+            <tr>
+              <td>AAR Case Laws</td>
+              <td class="count-cell">{{ aar_case_laws }}</td>
+            </tr>
+            <tr>
+              <td>AAAR Case Laws</td>
+              <td class="count-cell">{{ aaar_case_laws }}</td>
+            </tr>
+            <tr>
+              <td>High Court Case Laws</td>
+              <td class="count-cell">{{ high_court_case_laws }}</td>
+            </tr>
+            <tr>
+              <td>Supreme Court Case Laws</td>
+              <td class="count-cell">{{ supreme_court_case_laws }}</td>
+            </tr>
+          </tbody>
+        </table>
+
         {% if q %}
         <div style="overflow-x:auto; margin-top:10px;">
           <table>
@@ -347,7 +319,6 @@ table th{ font-weight:500; background:#fafafa; }
         {% endif %}
       </div>
     </div>
-
     <!-- DELETE -->
     <div id="panel-delete" class="panel {% if mode=='delete' and not edit_item %}show{% endif %}">
       <div class="card">
@@ -410,13 +381,13 @@ table th{ font-weight:500; background:#fafafa; }
         {% endif %}
       </div>
     </div>
-
   </div>
 </section>
-
 <script>
 function confirmDelete(caseno){
-  return confirm("Are you sure you want to permanently delete this case?\nCase: " + (caseno|| 'selected record') + "\nThis action cannot be undone.");
+  return confirm("Are you sure you want to permanently delete this case?
+Case: " + (caseno|| 'selected record') + "
+This action cannot be undone.");
 }
 </script>
 {% endblock %}
