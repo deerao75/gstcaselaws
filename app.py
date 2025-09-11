@@ -11,7 +11,7 @@ from collections import defaultdict
 # ======================= FLASK & UPLOAD CONFIG =======================
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
-app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32MB upload cap
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64MB upload cap
 ALLOWED_UPLOADS = {".xlsx", ".xls", ".csv"}
 
 # ======================= DB CONFIG =======================
@@ -1446,23 +1446,99 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[keep].copy()
 
 def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
+    # --- Handle 'date' column specifically ---
     if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        original_date_dtype = df["date"].dtype
+        print(f"[DEBUG] Original 'date' column dtype: {original_date_dtype}")
+        print(f"[DEBUG] Sample 'date' values before coercion:\n{df['date'].head(10)}")
+
+        # --- Attempt explicit format parsing ---
+        # --- IMPORTANT: CHANGE THE FORMAT STRING BELOW TO MATCH YOUR EXCEL FILE ---
+        # Common formats: DD-MM-YYYY -> "%d-%m-%Y", MM/DD/YYYY -> "%m/%d/%Y", YYYY-MM-DD -> "%Y-%m-%d"
+        # You MUST identify the format used in your specific Excel file.
+        excel_date_format = "%d-%m-%Y" # <--- CHANGE THIS LINE ---
+
+        if excel_date_format:
+            try:
+                # Parse using the specific format first for accuracy
+                df["date"] = pd.to_datetime(df["date"], format=excel_date_format, errors="coerce")
+                print(f"[INFO] Parsed dates using explicit format '{excel_date_format}'.")
+            except (ValueError, TypeError) as e_format:
+                # If the specific format fails, fall back to default parsing and warn
+                print(f"[WARNING] Failed to parse all dates with format '{excel_date_format}': {e_format}. Falling back to default parser.")
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        else:
+            # If no format is specified (excel_date_format is empty/falsy), use default parsing
+            print("[INFO] No specific date format provided, using default pd.to_datetime parser.")
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+        print(f"[DEBUG] 'date' column dtype after pd.to_datetime: {df['date'].dtype}")
+        print(f"[DEBUG] Sample 'date' values after pd.to_datetime:\n{df['date'].head(10)}")
+        nat_count_after_to_datetime = df["date"].isna().sum()
+        print(f"[DEBUG] Number of NaT/NaN in 'date' after pd.to_datetime: {nat_count_after_to_datetime}")
+
+        # --- CRITICAL: Explicitly convert pd.NaT to None ---
+        # This step ensures that SQLAlchemy/PyMySQL receives None, not pd.NaT.
+        nat_count_before_apply = df["date"].isna().sum()
+        # Use apply with a lambda to check for pd.isna (which correctly identifies NaT) and replace
+        df["date"] = df["date"].apply(lambda x: None if pd.isna(x) else x)
+        nat_count_after_apply = df["date"].isna().sum() # Should be 0 for the date column now
+        print(f"[INFO] Date column NaT conversion: {nat_count_before_apply} NaT/NaN values found, {nat_count_before_apply - nat_count_after_apply} converted to None.")
+        print(f"[DEBUG] 'date' column dtype after NaT->None conversion: {df['date'].dtype}")
+        print(f"[DEBUG] Sample 'date' values after NaT->None conversion:\n{df['date'].head(10)}")
+
+    # --- Handle 'year' column ---
     if "year" in df.columns:
         def _to_year(v):
-            if pd.isna(v): return None
+            # Handle cases where year might derive from an invalid date (which is now None)
+            # or is itself invalid/missing.
+            if pd.isna(v): # This correctly handles None, np.nan, pd.NaT
+                return None
             try:
                 s = str(v).strip()
-                if len(s) >= 4 and s[:4].isdigit(): return int(s[:4])
-                return int(float(s))
-            except Exception:
+                # Handle potential float representations like 2023.0
+                if '.' in s and s.replace('.', '', 1).isdigit():
+                     # Check if it's a whole number float
+                     float_val = float(s)
+                     if float_val.is_integer():
+                         s = str(int(float_val)) # Convert 2023.0 to "2023"
+                if len(s) >= 4 and s[:4].isdigit():
+                    return int(s[:4])
+                # If it's a shorter number or non-standard, try converting float then int
+                # This handles cases like "23" -> 2023 (if that logic is intended, otherwise remove)
+                # For now, let's stick to 4-digit extraction or float conversion
+                return int(float(s)) # This will raise ValueError if s is not numeric
+            except (ValueError, TypeError): # Catch conversion errors explicitly
+                # print(f"[DEBUG] Could not convert year value '{v}' to integer.")
                 return None
         df["year"] = df["year"].map(_to_year)
+        # Optional: If year was missing but date is valid, derive year from date
+        # Use pd.notna for boolean mask on datetime series if 'date' column exists and was processed
         if "date" in df.columns:
-            df["year"] = df["year"].fillna(df["date"].dt.year)
+             # Fill missing years where date is available and successfully parsed (not None)
+             mask_years_missing_dates_valid = df["year"].isna() & df["date"].notna()
+             if mask_years_missing_dates_valid.any():
+                 print(f"[INFO] Deriving {mask_years_missing_dates_valid.sum()} year(s) from parsed 'date' column.")
+                 df.loc[mask_years_missing_dates_valid, "year"] = df.loc[mask_years_missing_dates_valid, "date"].dt.year
+
+    # --- Handle other object columns (strings etc.) ---
     for c in df.columns:
+        # Apply string conversion and stripping only to object columns
         if df[c].dtype == object:
-            df[c] = df[c].map(lambda x: (str(x).strip() if x is not None else None))
+            # Use pd.isna to correctly check for None, NaN, NaT in object columns
+            # Map None/NaN values to None, others to stripped string
+            df[c] = df[c].map(lambda x: str(x).strip() if not pd.isna(x) else None)
+            # Debug: Check if any 'NaT' strings slipped through (shouldn't happen after datetime conversion)
+            if c == 'date' and df[c].isin(['NaT']).any():
+                 print(f"[ERROR] Found string 'NaT' in 'date' column after object processing! This indicates a problem.")
+                 # Force conversion again if needed (defensive)
+                 df[c] = df[c].replace('NaT', None)
+
+    # Debugging: Print final dtypes if needed
+    # print("[DEBUG] Final dtypes after _coerce_types:")
+    # print(df.dtypes)
+    # print("[DEBUG] Head of DataFrame after _coerce_types:")
+    # print(df.head())
     return df
 
 @app.get("/admin/bulk_upload/template")
