@@ -1271,6 +1271,10 @@ Return JSON with keys:
         return jsonify({"ok": False, "message": str(e)}), 500
 
 # ======================= Admin: list/edit/new/export/delete =======================
+from sqlalchemy import func, or_  # Make sure func and or_ are imported
+
+# ... other imports ...
+
 @app.get("/admin")
 def admin_root():
     return redirect(url_for("admin_caselaws"))
@@ -1281,17 +1285,99 @@ def admin_caselaws():
     page = max(int(request.args.get("page", 1)), 1)
     per_page = min(max(int(request.args.get("per_page", 20)), 1), 200)
     offset = (page - 1) * per_page
+    mode = request.args.get("mode", "edit") # Get mode for edit/delete panels
+    edit_item = None # Initialize edit_item
+
+    # Check if we are editing a specific item
+    if 'rid' in request.args or (request.referrer and 'rid=' in request.referrer):
+        # This part might need refinement based on how you handle edits
+        # For now, assuming edit_item is handled elsewhere or passed differently
+        # If you fetch edit_item based on 'rid', do it here
+        pass
+
     where_clause = _nlq_clause(q) if q else text("1=1")
+
     with ENGINE.connect() as conn:
+        # --- Existing Queries ---
         total = conn.execute(select(func.count()).select_from(Acer).where(where_clause)).scalar_one()
         rows = conn.execute(
             select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date, Acer.c.state)
             .where(where_clause).order_by(Acer.c.id.desc()).limit(per_page).offset(offset)
         ).mappings().all()
+
+        # --- New Statistics Queries ---
+        # 1. Total Case Laws (overall, not filtered)
+        total_case_laws = conn.execute(select(func.count()).select_from(Acer)).scalar_one()
+
+        # 2. AAR Case Laws - Adjust the filter condition if needed
+        aar_case_laws = conn.execute(
+            select(func.count())
+            .select_from(Acer)
+            .where(func.lower(Acer.c.type_of_court).contains('aar'))
+        ).scalar_one()
+
+        # 3. AAAR Case Laws - Adjust the filter condition if needed
+        aaar_case_laws = conn.execute(
+            select(func.count())
+            .select_from(Acer)
+            .where(func.lower(Acer.c.type_of_court).contains('aaar'))
+        ).scalar_one()
+
+        # 4. High Court Case Laws - Adjust the filter condition if needed
+        high_court_case_laws = conn.execute(
+            select(func.count())
+            .select_from(Acer)
+            .where(or_(
+                func.lower(Acer.c.type_of_court).contains('hc'),
+                func.lower(Acer.c.type_of_court).contains('high-court')
+            ))
+        ).scalar_one()
+
+        # 5. Supreme Court Case Laws - Adjust the filter condition if needed
+        supreme_court_case_laws = conn.execute(
+            select(func.count())
+            .select_from(Acer)
+            .where(or_(
+                func.lower(Acer.c.type_of_court).contains('supreme court'),
+                func.lower(Acer.c.type_of_court).contains('supreme-court')
+            ))
+        ).scalar_one()
+
+        # Handle potential edit item (you might need to adjust how rid is obtained)
+        rid = request.args.get('rid')
+        if rid:
+            try:
+                edit_item_result = conn.execute(
+                    select(Acer).where(Acer.c.id == int(rid))
+                ).mappings().first()
+                if edit_item_result:
+                    edit_item = edit_item_result
+            except (ValueError, TypeError):
+                edit_item = None
+        else:
+            edit_item = None
+
+
     return render_template(
         "admin_caselaws.html",
-        rows=rows, page=page, per_page=per_page, total=total, q=q, table_name=TABLE_NAME
+        # --- Existing Variables ---
+        rows=rows,
+        page=page,
+        per_page=per_page,
+        total=total,
+        q=q,
+        table_name=TABLE_NAME,
+        mode=mode, # Pass mode to template
+        edit_item=edit_item, # Pass edit_item to template
+        # --- New Statistics Variables ---
+        total_case_laws=total_case_laws,
+        aar_case_laws=aar_case_laws,
+        aaar_case_laws=aaar_case_laws,
+        high_court_case_laws=high_court_case_laws,
+        supreme_court_case_laws=supreme_court_case_laws
     )
+
+# ... other routes ...
 
 @app.route("/admin/caselaws/<int:rid>/edit", methods=["GET", "POST"])
 def admin_edit_case(rid: int):
