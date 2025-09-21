@@ -1311,19 +1311,27 @@ def admin_caselaws():
         # 1. Total Case Laws (overall, not filtered)
         total_case_laws = conn.execute(select(func.count()).select_from(Acer)).scalar_one()
 
-        # 2. AAR Case Laws - Adjust the filter condition if needed
+        # 2. AAR Case Laws - Count rows containing 'aar' but NOT containing 'aaar'
+        #    Also ensure it's case-insensitive
         aar_case_laws = conn.execute(
             select(func.count())
             .select_from(Acer)
-            .where(func.lower(Acer.c.type_of_court).contains('aar'))
+            .where(
+                and_(
+                    func.lower(Acer.c.type_of_court).contains('aar'),      # Must contain 'aar'
+                    ~func.lower(Acer.c.type_of_court).contains('aaar')     # Must NOT contain 'aaar' (~ is NOT)
+                )
+            )
         ).scalar_one()
 
-        # 3. AAAR Case Laws - Adjust the filter condition if needed
+        # 3. AAAR Case Laws - Count rows containing 'aaar' (case-insensitive)
+        #    This one is fine as it specifically looks for 'aaar'
         aaar_case_laws = conn.execute(
             select(func.count())
             .select_from(Acer)
             .where(func.lower(Acer.c.type_of_court).contains('aaar'))
         ).scalar_one()
+
 
         # 4. High Court Case Laws - Adjust the filter condition if needed
         high_court_case_laws = conn.execute(
@@ -1474,17 +1482,153 @@ def admin_new_case():
     empty["id"] = ""
     return render_template("admin_edit.html", r=empty, mode="new")
 
+# --- ADD THIS FUNCTION for HTML Cleaning ---
+def clean_html(raw_html: str) -> str:
+    """
+    Removes HTML tags and converts common HTML entities for clean text export.
+    """
+    if not isinstance(raw_html, str):
+        return str(raw_html) if raw_html is not None else ""
+    # Remove HTML tags using regex
+    clean_text = re.sub(r'<[^>]*>', '', raw_html)
+    # Convert common HTML entities
+    clean_text = clean_text.replace('&nbsp;', ' ')
+    clean_text = clean_text.replace('&amp;', '&')
+    clean_text = clean_text.replace('<', '<')
+    clean_text = clean_text.replace('>', '>')
+    clean_text = clean_text.replace('&quot;', '"')
+    clean_text = clean_text.replace('&#39;', "'")
+    # Add more entity replacements if needed
+    return clean_text.strip()
+
+# --- ADD THIS FUNCTION for HTML Cleaning (Enhanced) ---
+def clean_html(raw_html: str) -> str:
+    """
+    Removes HTML tags and converts common HTML entities for clean text export.
+    This function specifically handles <p>, <ul>, <li>, and other common tags.
+    """
+    if not isinstance(raw_html, str):
+        return str(raw_html) if raw_html is not None else ""
+
+    # Remove HTML tags using regex
+    # This pattern matches any opening or closing tag, including self-closing ones like <br/>
+    clean_text = re.sub(r'<[^>]+>', '', raw_html)
+
+    # Convert common HTML entities
+    clean_text = clean_text.replace('&nbsp;', ' ')
+    clean_text = clean_text.replace('&amp;', '&')
+    clean_text = clean_text.replace('<', '<')
+    clean_text = clean_text.replace('>', '>')
+    clean_text = clean_text.replace('&quot;', '"')
+    clean_text = clean_text.replace('&#39;', "'")
+
+    # Clean up extra whitespace (optional, makes output look neater)
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+
+    return clean_text
+
+# --- Define the desired column order for export ---
+EXPORT_COLUMN_ORDER = [
+    'case_law_number',
+    'name_of_party',
+    'date',
+    'state',
+    'year',
+    'type_of_court',
+    'industry_sector',
+    'subject_matter1',
+    'subject_matter2',
+    'section',
+    'rule',
+    'case_name',
+    'citation', # Included in export but cleaned
+    'basic_detail',
+    'summary_head_note',
+    'question_answered'
+    # 'full_case_law' is intentionally excluded
+]
+
 @app.get("/admin/export_csv")
 def admin_export_csv():
-    cols = [getattr(Acer.c, c) for c in ALL_COLS if hasattr(Acer.c, c)]
-    with ENGINE.connect() as conn:
-        rows = conn.execute(select(*cols).order_by(Acer.c.id.desc())).mappings().all()
-    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=[c.name for c in cols])
-    buf = io.BytesIO()
-    # Excel-friendly: UTF-8 with BOM
-    df.to_csv(buf, index=False, encoding="utf-8-sig")
-    buf.seek(0)
-    return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="cases.csv")
+    try:
+        # --- 1. Check if required objects are defined ---
+        # (Add checks similar to the previous example if needed,
+        # or ensure these are imported/globally accessible)
+        # global ENGINE, Acer, ALL_COLS # Example for global access
+
+        if 'ALL_COLS' not in globals() or not ALL_COLS:
+            print("Error: ALL_COLS is not defined or is empty.")
+            return "Error: Column list (ALL_COLS) is missing or empty.", 500
+
+        if 'Acer' not in globals() or Acer is None:
+            print("Error: Table object 'Acer' is not defined.")
+            return "Error: Table object 'Acer' is missing.", 500
+
+        if 'ENGINE' not in globals() or ENGINE is None:
+            print("Error: Database engine 'ENGINE' is not defined.")
+            return "Error: Database engine is missing.", 500
+
+        # --- 2. Build column list based on EXPORT_COLUMN_ORDER ---
+        # Ensure the column names in EXPORT_COLUMN_ORDER exist in the table
+        cols_to_select = [getattr(Acer.c, c) for c in EXPORT_COLUMN_ORDER if hasattr(Acer.c, c)]
+
+        selected_column_names = [c.name for c in cols_to_select]
+
+        if not cols_to_select:
+            print("Warning: No valid columns found based on EXPORT_COLUMN_ORDER.")
+            df = pd.DataFrame(columns=EXPORT_COLUMN_ORDER)
+        else:
+            # --- 3. Execute Query ---
+            with ENGINE.connect() as conn:
+                result = conn.execute(select(*cols_to_select).order_by(Acer.c.id.desc()))
+                rows = result.mappings().all()
+
+            # --- 4. Create DataFrame ---
+            df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=selected_column_names)
+
+            # --- 5. Clean HTML Columns ONLY for Export ---
+            print(f"Fetched {len(rows)} rows. Cleaning HTML for export...")
+
+            # Define which columns contain HTML that needs cleaning for export
+            html_columns_to_clean = [
+                'summary_head_note',
+                'question_answered',
+                'basic_detail',
+                'citation' # Add 'citation' to the list of columns to clean
+            ]
+
+            # --- IMPORTANT: Ensure columns exist in DataFrame before trying to clean ---
+            existing_html_columns = [col for col in html_columns_to_clean if col in df.columns]
+
+            if existing_html_columns:
+                 # Apply the clean_html function to each specified column
+                 for col_name in existing_html_columns:
+                     # Fill NaN/None with empty string temporarily for cleaning
+                     df[col_name] = df[col_name].fillna("").apply(lambda x: clean_html(x) if pd.notna(x) else "")
+
+            # --- 6. Reorder DataFrame Columns ---
+            final_column_order = [col for col in EXPORT_COLUMN_ORDER if col in df.columns]
+            if final_column_order:
+                df = df[final_column_order]
+
+            print("HTML cleaning and column reordering for export completed.")
+
+        # --- 7. Write to Buffer ---
+        buf = io.BytesIO()
+        # Excel-friendly: UTF-8 with BOM
+        df.to_csv(buf, index=False, encoding="utf-8-sig")
+        buf.seek(0)
+
+        # --- 8. Send File ---
+        # For Flask 2.0+
+        return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="cases_cleaned_export.csv")
+
+    except Exception as e:
+        # --- 9. Handle Unexpected Errors ---
+        print(f"An error occurred during CSV export: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Internal Server Error during export: {str(e)}", 500
 
 # ---- Aliases so "Bulk Download" buttons never 404 ----
 @app.get("/admin/bulk_download")
