@@ -7,6 +7,8 @@ from werkzeug.utils import secure_filename
 import os, re, io, ssl, json, time, hashlib, math
 import pandas as pd
 from collections import defaultdict
+import numpy as np
+
 
 # ======================= FLASK & UPLOAD CONFIG =======================
 app = Flask(__name__)
@@ -1674,6 +1676,13 @@ def admin_bulk_upload():
         flash("Uploaded file is empty.", "err")
         return redirect(url_for("admin_caselaws"))
 
+    # --- CRUCIAL FIX: Explicitly replace nan/NaN values with None ---
+    # This ensures that pandas' NaN (which can be numpy.nan) is converted
+    # to Python None, which SQLAlchemy/PyMySQL correctly handles as SQL NULL.
+    # Place this immediately after reading the DataFrame and before any processing.
+    df = df.replace({np.nan: None})
+    # --- End of Fix ---
+
     # Normalize column names: clean and map using _SYNONYMS
     def clean_key(s):
         return re.sub(r"\s+", " ", s.strip().lower())
@@ -1704,25 +1713,35 @@ def admin_bulk_upload():
     # Keep only columns present in database
     df = df[[c for c in _TEMPLATE_COLUMNS if c in df.columns]]
 
-    # Coerce types
+    # Coerce types (ensure this doesn't reintroduce problematic NaNs)
     df = _coerce_types(df)
+    # Apply the replace again after type coercion as a safeguard
+    df = df.replace({np.nan: None})
 
-    # Replace NaN with None for SQL NULL
-    records = df.where(pd.notnull(df), None).to_dict("records")
+    # Convert to records (list of dictionaries)
+    # The replace({np.nan: None}) should have handled this, but using where/notnull is an alternative
+    # records = df.where(pd.notnull(df), None).to_dict("records")
+    # Let's use the safer approach with replace ensuring None
+    records = df.to_dict("records")
+    # The df.replace({np.nan: None}) call above should have already converted NaNs to None in the df,
+    # and thus in the dictionaries created by to_dict("records").
 
     if not records:
         flash("No data to insert.", "err")
         return redirect(url_for("admin_caselaws"))
 
     try:
-        with ENGINE.begin() as conn:
+        with ENGINE.begin() as conn: # Assuming ENGINE is your SQLAlchemy engine
             # Delete existing rows with same case_law_number
             case_numbers = [r["case_law_number"] for r in records if r["case_law_number"] is not None]
             if case_numbers:
+                # Assuming Acer is your table object
                 conn.execute(delete(Acer).where(Acer.c.case_law_number.in_(case_numbers)))
             # Insert new data
-            conn.execute(insert(Acer), records)
+            conn.execute(insert(Acer), records) # Assuming Acer is your table object
     except Exception as e:
+        # It's good practice to log the full error for debugging
+        print(f"Database insert failed: {e}") # Add this for server logs
         flash(f"Database insert failed: {e}", "err")
         return redirect(url_for("admin_caselaws"))
 
