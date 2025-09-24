@@ -110,8 +110,7 @@ VEC_ONLY_MIN       = float(os.getenv("VEC_ONLY_MIN", "0.55"))      # min cosine 
 # Predefined admin users: email -> hashed_password
 # Password: "admin123"
 ADMIN_USERS = {
-    "admin@acergst.com": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",  # sha256("admin123")
-    "support@acergst.com": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+    "admin@acergst.com": "562b649530dccabdaaa91aeccbdbb218f19da0f13963b97442621a34beb876fc",  # sha256("admin123")
 }
 
 def hash_password(password):
