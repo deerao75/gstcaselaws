@@ -104,7 +104,21 @@ CANDIDATE_WIDE    = int(os.getenv("HYBRID_CANDIDATES_WIDE", "800"))
 # Vector-only recall sweep controls
 VECTOR_SWEEP_LIMIT = int(os.getenv("VECTOR_SWEEP_LIMIT", "1200"))  # how many rows to scan for pure vector recall
 VECTOR_TOPK        = int(os.getenv("VECTOR_TOPK", "250"))          # top-k vector-only hits to merge
-VEC_ONLY_MIN       = float(os.getenv("VEC_ONLY_MIN", "0.40"))      # min cosine to keep vector-only hits (Lowered as discussed)
+VEC_ONLY_MIN       = float(os.getenv("VEC_ONLY_MIN", "0.55"))      # min cosine to keep vector-only hits (Lowered as discussed)
+
+
+# Predefined admin users: email -> hashed_password
+# Password: "admin123"
+ADMIN_USERS = {
+    "admin@acergst.com": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",  # sha256("admin123")
+    "support@acergst.com": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+}
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Optional: Add more admins programmatically
+# ADMIN_USERS["new@admin.com"] = hash_password("yourpassword")
 
 def _openai_chat(messages, max_tokens=800, temperature=0.35):
     if not OPENAI_API_KEY:
@@ -180,6 +194,47 @@ def _openai_embed(text: str, model: str = None):
         except Exception as e_old:
             print("Embedding error:", e_old or e_new)
             return None
+@app.before_request
+def require_login_for_admin_prefix():
+    """
+    Gate all /admin* routes behind login and enforce a simple idle timeout.
+    - If not logged in, redirect to /login?next=...
+    - If idle for >30 minutes, force re-login.
+    """
+    # Local import so this def is self-contained for copy-paste
+    import time as _t
+
+    path = (request.path or "")
+    if not path.startswith("/admin"):
+        return  # only guard the /admin prefix
+
+    # If there is no authenticated admin in session, bounce to login
+    if 'admin_email' not in session:
+        return redirect(url_for('login', next=request.url))
+
+    # Idle-timeout check (30 minutes). Adjust seconds (1800) if you want.
+    now = int(_t.time())
+    last_seen = session.get('last_seen_at')
+    if last_seen and (now - last_seen) > 1800:
+        # Too long idle — clear session and ask to re-login
+        session.pop('admin_email', None)
+        session.pop('last_seen_at', None)
+        return redirect(url_for('login', next=request.url))
+
+    # Refresh the activity timestamp on any /admin request
+    session['last_seen_at'] = now
+
+
+from functools import wraps
+from flask import Flask, session, redirect, url_for, request, render_template
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'admin_email' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # ======================= RUNTIME CACHES =======================
 _AI_CACHE = {}
@@ -1277,6 +1332,51 @@ from sqlalchemy import func, or_  # Make sure func and or_ are imported
 
 # ... other imports ...
 
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """
+    Login using ADMIN_USERS (email -> sha256(password) hash).
+    Expects form fields: name="email", name="password".
+    On success, sets session['admin_email'] and session['last_seen_at'].
+    Honors ?next=... redirect if present.
+    """
+    error = None
+    if request.method == 'POST':
+        email = (request.form.get('email') or request.form.get('username') or '').strip().lower()
+        password = request.form.get('password') or ''
+
+        # Compute SHA-256 using your helper if present, else fallback
+        try:
+            computed_hash = hash_password(password)  # your existing helper
+        except NameError:
+            import hashlib
+            computed_hash = hashlib.sha256(password.encode()).hexdigest()
+
+        stored_hash = ADMIN_USERS.get(email)
+
+        if stored_hash and stored_hash == computed_hash:
+            # success: establish session and redirect
+            import time as _t
+            session['admin_email'] = email
+            session['last_seen_at'] = int(_t.time())
+            nxt = request.args.get('next')
+            return redirect(nxt or url_for('admin_caselaws'))
+        else:
+            error = "Invalid email or password."
+
+    return render_template('login.html', error=error)
+
+@app.route('/logout')
+def logout():
+    """
+    Clear admin session and return to the login page.
+    """
+    session.pop('admin_email', None)
+    session.pop('last_seen_at', None)
+    return redirect(url_for('login'))
+
 @app.get("/admin")
 def admin_root():
     return redirect(url_for("admin_caselaws"))
@@ -1943,6 +2043,25 @@ def _subjects_grouped():
     out = {k: sorted(v) for k, v in sorted(d.items(), key=lambda kv: kv[0].lower())}
     _meta_cache_set(ck, out, ttl_sec=300)
     return out
+
+import logging
+
+@app.route('/_diag/test_login', methods=['POST'])
+def _diag_test_login():
+    # TEMPORARY: For debugging only. Remove after fixing.
+    email = (request.form.get('email') or request.form.get('username') or '').strip().lower()
+    password = request.form.get('password') or ''
+    computed = hash_password(password)
+    stored = ADMIN_USERS.get(email)
+    logging.warning("LOGIN DIAG email=%r stored=%r computed=%r match=%r",
+                    email, stored, computed, stored == computed)
+    return {
+        "email": email,
+        "stored_hash_present": bool(stored),
+        "hash_of_entered_password": computed,
+        "matches_stored_hash": bool(stored and stored == computed)
+    }, 200
+
 
 if __name__ == "__main__":
     app.run(debug=True)

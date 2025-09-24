@@ -3,10 +3,8 @@
 {% block head %}
 <style>
   :root{ --sheet-bg:#fff; --sheet-bd:#eaeaea; --soft:0 10px 28px rgba(0,0,0,.08); --orange:#ff7a00; }
-
   .page-wrap{ display:grid; grid-template-columns: 1fr; gap:16px; align-items:start; }
   .has-panel .page-wrap{ grid-template-columns: 320px minmax(0,1fr); }
-
   .side-panel{
     display:none; border:1px solid #eee; border-radius:14px; background:#fff;
     box-shadow: var(--soft); padding:12px; position:sticky; top:14px;
@@ -15,17 +13,14 @@
   }
   .side-panel .crit{ font-weight:700; margin:0 0 6px 0; color:#111; border-bottom:1px solid #eee; padding:0 0 6px 0; }
   .side-panel h4{ margin:0 0 6px 0; font-size:16px; font-weight:700; color:#111; }
-
   .side-panel .mini{ display:flex; flex-direction:column; gap:8px; }
   .side-panel .mini .item{ border:1px solid #eee; border-radius:10px; padding:10px; background:#fafafa; }
   .side-panel .mini .item .row{
     display:grid; grid-template-columns: 70px 1fr; gap:6px; font-size:12px; margin:2px 0; align-items:start; line-height:1.3;
   }
   .side-panel .mini .item .row b{ color:#444; font-weight:600; }
-
   .panel-case{ display:inline-block; font-weight:600; color:var(--orange); text-decoration:none; margin-bottom:4px; font-size:12px; }
   .panel-case:hover{ text-decoration:underline; }
-
   .sheet{background:var(--sheet-bg);border:1px solid var(--sheet-bd);box-shadow:var(--soft);border-radius:16px;padding:20px}
   .top-row{display:flex;align-items:center;gap:10px;margin-bottom:10px; position:relative; z-index:5;}
   .spacer{flex:1}
@@ -36,7 +31,6 @@
   .print-btn:hover,.back-btn:hover{background:#f7f7f7;box-shadow:0 6px 16px rgba(0,0,0,.1)}
   .print-btn:active,.back-btn:active{transform:translateY(1px)}
   .print-icon{width:20px;height:20px}
-
   .hero-case{border:1px solid #efefef;border-radius:14px;padding:16px;margin-bottom:12px;background:linear-gradient(180deg,#fff 0%,#fafafa 100%)}
   .case-no{font-weight:800;color:#111}
   .case-no strong{color:var(--orange)}
@@ -44,17 +38,14 @@
   .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;align-items:center;color:#222;font-weight:700}
   .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:#f6f6f6;border:1px solid #ececec;font-size:12px;color:#111}
   .pill .dot{width:6px;height:6px;border-radius:50%;background:var(--orange);display:inline-block}
-
   h3.section{margin:14px 0 8px 0;font-size:18px;font-weight:900;color:#111}
   .box{background:#f9fafb;border:1px solid #ededed;border-radius:14px;padding:16px;margin-bottom:12px}
   .pad-left{padding-left:14px}
   .section-divider{height:1px;background:#000;margin:12px 0}
-
   .prose,.prose *{ font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif !important; font-size:11pt !important; line-height:1.5 !important; color:#111 !important; text-align:justify; }
   .prose img{max-width:100%;height:auto}
   .prose table{border-collapse:collapse;margin:8px auto}
   .prose table td,.prose table th{border:1px solid #ddd;padding:6px}
-
   .fullcase.prose{white-space:normal !important; max-height:60vh; overflow:auto;}
   .fullcase.prose p,.fullcase.prose li,.fullcase.prose h1,.fullcase.prose h2,.fullcase.prose h3,.fullcase.prose h4,.fullcase.prose h5,.fullcase.prose h6,.fullcase.prose div{margin:6pt 0 !important}
   .fullcase.prose *:empty{display:none}
@@ -63,34 +54,64 @@
 
   /* PRINT */
   .print-first-header{ display:none; }
-  @page{ margin:20mm 16mm 30mm 12mm; }
-
+  @page {
+    margin: 20mm 16mm 30mm 12mm;
+    @top-right {
+      content: url("{{ brand_logo_url or url_for('static', filename='images/acer_logo.png') }}");
+      height: 5px;
+      width: auto;
+      margin-top: 5px;
+      opacity: 0.8;
+    }
+    @bottom-center {
+      content: "www.acergst.com | Page " counter(page);
+      font-family: sans-serif;
+      font-size: 10px;
+      color: #555;
+      white-space: nowrap;
+    }
+  }
   @media print{
     *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; box-shadow:none !important; }
     body, .sheet, .box, .hero-case, .pill, .prose table, .side-panel, .top-row, .print-btn, .back-btn{ background:transparent !important; }
     .hero-case, .box, .sheet{ border-color:#ccc !important; border-radius:0 !important; }
-    .party-name{ background:none !important; color:#000 !important; -webkit-background-clip:initial !important; background-clip:initial !important; }
+    .party-name{
+      background:none !important;
+      color:#000 !important;
+      -webkit-background-clip:initial !important;
+      background-clip:initial !important;
+      font-weight:600 !important;
+      font-size:22px !important;
+      text-align:center !important;
+      margin:8px 0 !important;
+    }
+    .case-no{
+      font-weight:600 !important;
+      color:#000 !important;
+      text-align:center !important;
+      margin:0 auto;
+      display:block;
+      width: fit-content;
+      padding:0;
+    }
+    .case-no strong{ color:#000 !important; }
+    .hero-case {
+      text-align: center;
+      padding:12px !important;
+    }
     .pill{ border-color:#ccc !important; }
     .pill .dot{ background:#000 !important; }
     .section-divider{ background:#000 !important; }
-
     .print-page-head{ display:none !important; }
-
     .topbar,.footer,.back-btn,.print-chooser,.top-row,#printBtn,.side-panel{display:none !important}
     .sheet{border:0; padding:0}
+    .print-brand{ display:none !important; }
 
-    .print-brand{
-      display:block !important;
-      position:static;
-      margin:0 0 6mm 0;
-      font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
-      font-size:12px; color:#000; font-weight:700;
-      display:flex; align-items:center; gap:8px;
-    }
-    .print-brand img{ height:40px; width:auto; }
+    /* Remove Full Case Law heading and avoid forced page break */
+    #section-fullcase { page-break-before: avoid; }
+    #section-fullcase > h3.section { display: none; }
 
-    /* ALWAYS start Full Case on a new page; print full content */
-    #section-fullcase{ page-break-before: always; }
+    /* Ensure full case flows naturally */
     .fullcase.prose, #fullCase{ max-height:none !important; overflow:visible !important; }
 
     /* Avoid splitting tables */
@@ -103,13 +124,13 @@
       position:fixed;
       top:55%; left:50%;
       transform:translate(-50%,-50%) rotate(-25deg);
-      font-size:32pt;      /* small */
+      font-size:32pt;
       font-weight:800;
       color:#000;
       opacity:.05;
       z-index:-1;
       pointer-events:none;
-      white-space:nowrap;  /* one line */
+      white-space:nowrap;
       line-height:1;
     }
 
@@ -117,28 +138,44 @@
     .print-endcase{ display:block !important; margin:4mm 0 0 0; text-align:center; }
     .print-endcase hr{ border:none; border-top:1px solid #000; margin:0 0 2mm 0; }
     .print-endcase .case{ font-size:11px; }
-  }
 
+    /* Center the meta data (pills) */
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      align-items: center;
+      margin-top: 8px;
+      color: #222;
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .pill {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 8px;
+    }
+    .pill .dot {
+      width: 5px;
+      height: 5px;
+    }
+  }
   @media (max-width: 1100px){
     .has-panel .page-wrap{ grid-template-columns: 1fr; }
     .side-panel{ position:static; max-height:none; }
   }
-
   .print-brand { display: none; }
   @media print {
     .print-brand {
-      display: flex !important;
-      align-items: center;
-      gap: 8px;
-      margin: 0 0 6mm 0;
+      display: none !important;
     }
-  }
 
+  }
   /* highlight in detail view */
   .hl{ background:var(--orange-faint); border-radius:3px; padding:0 2px; }
 </style>
 {% endblock %}
-
 {% block content %}
 <div class="container {% if search_summary or list_results or all_results or results %}has-panel{% endif %}">
   <div class="page-wrap">
@@ -149,7 +186,6 @@
         <div class="box" style="background:#fff">{{ search_summary }}</div>
         <div class="section-divider"></div>
       {% endif %}
-
       {% if list_results or all_results or results %}
         <h4>Results</h4>
         <div class="mini">
@@ -174,22 +210,13 @@
         </div>
       {% endif %}
     </aside>
-
     <!-- Main -->
     <div>
       <!-- (removed in print) -->
       <div class="print-page-head" aria-hidden="true">
         <span class="pp-case">Case No.: {{ r.case_law_number }}</span> • <span class="pp-page"></span>
       </div>
-
       <div class="sheet print-pad">
-
-        <!-- PRINT brand (first page) -->
-        <div class="print-brand">
-          <img src="{{ brand_logo_url or url_for('static', filename='images/acer_logo.png') }}" alt="Acer logo">
-          GST Case Law Explorer
-        </div>
-
         <!-- Controls -->
         <div class="top-row">
           <button type="button" class="back-btn"
@@ -203,7 +230,6 @@
             Print
           </button>
         </div>
-
         <!-- Hero -->
         <div class="hero-case">
           <div class="case-no">Case No.: <strong>{{ r.case_law_number }}</strong></div>
@@ -222,17 +248,14 @@
             {% if r.rule %}<span class="pill"><span class="dot"></span>Rule: {{ r.rule }}</span>{% endif %}
           </div>
         </div>
-
         <!-- Summary / Headnotes -->
         <div class="box" id="section-headnotes">
           <h3 class="section">Summary / Headnotes</h3>
-          <!-- Deliver exactly as in DB (HTML preserved; continuous paragraphs as stored) -->
           <div class="prose headnotes js-hl-scope" id="hnContainer">
             {{ (r.get('summary_head_note') or r.get('summary_full') or r.get('Head Notes')) | safe }}
           </div>
         </div>
         <div class="section-divider"></div>
-
         <!-- Question Answered -->
         {% if r.question_answered %}
         <div class="box" id="section-qa">
@@ -241,12 +264,16 @@
         </div>
         <div class="section-divider"></div>
         {% endif %}
-
         <!-- Citations -->
         {% if citations_text %}
         <div class="box" id="section-citations">
           <h3 class="section">Citations</h3>
-          {% set _cits = citations_text | replace(';','\n') | replace(',', '\n') | replace('<br>','\n') | replace('<br/>','\n') | replace('<br />','\n') %}
+          {% set _cits = citations_text | replace(';','
+') | replace(',', '
+') | replace('<br>','
+') | replace('<br/>','
+') | replace('<br />','
+') %}
           {% set _list = _cits.splitlines() %}
           <div class="prose">
             <ul id="citList" style="margin:0;padding-left:18px">
@@ -258,13 +285,11 @@
         </div>
         <div class="section-divider"></div>
         {% endif %}
-
         <!-- Full Case Law -->
         {% if full_case_html %}
         <div id="section-fullcase">
-          <h3 class="section pad-left">Full Case Law</h3>
+          <!-- h3.section pad-left removed per requirement -->
           <div class="prose fullcase js-hl-scope" id="fullCase">{{ full_case_html|safe }}</div>
-          <!-- end-of-case line + case number (print only) -->
           <div class="print-endcase" style="display:none;">
             <hr><div class="case">Case No.: {{ r.case_law_number }}</div>
           </div>
@@ -275,7 +300,6 @@
   </div>
 </div>
 {% endblock %}
-
 {% block scripts %}
 <script>
   // FULL CASE: minor <br> collapse on screen only (leave print intact)
@@ -285,9 +309,6 @@
     if (window.matchMedia && window.matchMedia('print').matches) return;
     el.innerHTML = el.innerHTML.replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br>');
   })();
-
-  // (Removed headnotes-normalizing JS so that DB formatting shows exactly as-is)
-
   // CITATIONS: linkify AGST case numbers
   (function(){
     var ul = document.getElementById('citList');
@@ -303,16 +324,13 @@
       if (replaced !== html) li.innerHTML = replaced;
     });
   })();
-
   // Highlight search phrase in detail view
   (function(){
     const params = new URLSearchParams(location.search);
     const q = (params.get('q') || '').trim();
     if (!q) return;
-
     const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp('(' + esc + ')', 'gi');
-
     function walk(node){
       if (node.nodeType === 3){
         const txt = node.nodeValue;
@@ -327,7 +345,6 @@
       }
       Array.from(node.childNodes).forEach(walk);
     }
-
     document.querySelectorAll('.js-hl-scope').forEach(function(scope){
       Array.from(scope.childNodes).forEach(walk);
     });

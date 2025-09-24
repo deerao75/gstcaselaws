@@ -104,6 +104,7 @@ table th{ font-weight:500; background:#fafafa; }
     <a class="nav-link {% if mode=='delete' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=delete">🗑️ Delete</a>
     <a class="nav-link" id="bulkDownloadLink" href="{{ url_for('admin_export_csv') }}">⬇️ Bulk Download</a>
     <a class="nav-link" id="bulkUploadLink" href="javascript:void(0)" onclick="document.getElementById('panel-bulkupload').classList.add('show'); document.querySelectorAll('.panel').forEach(p => p !== document.getElementById('panel-bulkupload') && p.classList.remove('show'));">⬆️ Bulk Upload</a>
+    <a class="nav-link" href="{{ url_for('logout') }}">🚪 Logout</a>
   </aside>
   <!-- RIGHT CONTENT -->
   <div class="main">
