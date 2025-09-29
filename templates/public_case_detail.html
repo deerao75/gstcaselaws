@@ -42,7 +42,7 @@
   .box{background:#f9fafb;border:1px solid #ededed;border-radius:14px;padding:16px;margin-bottom:12px}
   .pad-left{padding-left:14px}
   .section-divider{height:1px;background:#000;margin:12px 0}
-  .prose,.prose *{ font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif !important; font-size:11pt !important; line-height:1.5 !important; color:#111 !important; text-align:justify; }
+  .prose,.prose *{ font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif !important; font-size:12pt !important; line-height:1.5 !important; color:#111 !important; text-align:justify; }
   .prose img{max-width:100%;height:auto}
   .prose table{border-collapse:collapse;margin:8px auto}
   .prose table td,.prose table th{border:1px solid #ddd;padding:6px}
@@ -53,52 +53,31 @@
   .fullcase.prose p:has(br){margin:6pt 0 !important}
 
   /* PRINT */
-  .print-first-header{ display:none; }
-  @page {
-    margin: 20mm 16mm 30mm 12mm;
-    @top-right {
-      content: url("{{ brand_logo_url or url_for('static', filename='images/acer_logo.png') }}");
-      height: 5px;
-      width: auto;
-      margin-top: 5px;
-      opacity: 0.8;
+  .print-first-header { display:none; }
+
+  @media print {
+    @page { margin: 20mm 16mm 30mm 12mm; }
+    header.topbar { visibility: hidden; }
+    header.topbar img {
+      visibility: visible;
+      position: fixed;
+      top: 10mm; right: 16mm;
+      width: 18mm !important; height: auto !important;
+      opacity: 0.9; z-index: 1000;
     }
-    @bottom-center {
-      content: "www.acergst.com | Page " counter(page);
-      font-family: sans-serif;
-      font-size: 10px;
-      color: #555;
-      white-space: nowrap;
+    @page {
+      @bottom-center {
+        content: "www.acergst.com | Page " counter(page);
+        font-family: sans-serif; font-size: 10px; color: #555; white-space: nowrap;
+      }
     }
-  }
-  @media print{
     *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; box-shadow:none !important; }
     body, .sheet, .box, .hero-case, .pill, .prose table, .side-panel, .top-row, .print-btn, .back-btn{ background:transparent !important; }
     .hero-case, .box, .sheet{ border-color:#ccc !important; border-radius:0 !important; }
-    .party-name{
-      background:none !important;
-      color:#000 !important;
-      -webkit-background-clip:initial !important;
-      background-clip:initial !important;
-      font-weight:600 !important;
-      font-size:22px !important;
-      text-align:center !important;
-      margin:8px 0 !important;
-    }
-    .case-no{
-      font-weight:600 !important;
-      color:#000 !important;
-      text-align:center !important;
-      margin:0 auto;
-      display:block;
-      width: fit-content;
-      padding:0;
-    }
+    .party-name{ background:none !important; color:#000 !important; -webkit-background-clip:initial !important; background-clip:initial !important; font-weight:600 !important; font-size:22px !important; text-align:center !important; margin:8px 0 !important; }
+    .case-no{ font-weight:600 !important; color:#000 !important; text-align:center !important; margin:0 auto; display:block; width: fit-content; padding:0; }
     .case-no strong{ color:#000 !important; }
-    .hero-case {
-      text-align: center;
-      padding:12px !important;
-    }
+    .hero-case { text-align: center; padding:12px !important; }
     .pill{ border-color:#ccc !important; }
     .pill .dot{ background:#000 !important; }
     .section-divider{ background:#000 !important; }
@@ -106,72 +85,32 @@
     .topbar,.footer,.back-btn,.print-chooser,.top-row,#printBtn,.side-panel{display:none !important}
     .sheet{border:0; padding:0}
     .print-brand{ display:none !important; }
-
-    /* Remove Full Case Law heading and avoid forced page break */
     #section-fullcase { page-break-before: avoid; }
     #section-fullcase > h3.section { display: none; }
-
-    /* Ensure full case flows naturally */
     .fullcase.prose, #fullCase{ max-height:none !important; overflow:visible !important; }
-
-    /* Avoid splitting tables */
     .prose table, .box table { break-inside: avoid; page-break-inside: avoid; }
     .prose tr, .prose td, .prose th, .box tr, .box td, .box th { break-inside: avoid; page-break-inside: avoid; }
-
-    /* Watermark = Case No., one line, small */
     body::before{
       content:"{{ r.case_law_number }}";
-      position:fixed;
-      top:55%; left:50%;
+      position:fixed; top:55%; left:50%;
       transform:translate(-50%,-50%) rotate(-25deg);
-      font-size:32pt;
-      font-weight:800;
-      color:#000;
-      opacity:.05;
-      z-index:-1;
-      pointer-events:none;
-      white-space:nowrap;
-      line-height:1;
+      font-size:32pt; font-weight:800; color:#000; opacity:.05;
+      z-index:-1; pointer-events:none; white-space:nowrap; line-height:1;
     }
-
-    /* End-of-case line + case number (print only) */
     .print-endcase{ display:block !important; margin:4mm 0 0 0; text-align:center; }
     .print-endcase hr{ border:none; border-top:1px solid #000; margin:0 0 2mm 0; }
     .print-endcase .case{ font-size:11px; }
-
-    /* Center the meta data (pills) */
-    .meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: center;
-      align-items: center;
-      margin-top: 8px;
-      color: #222;
-      font-weight: 600;
-      font-size: 11px;
-    }
-    .pill {
-      font-size: 11px;
-      padding: 4px 8px;
-      border-radius: 8px;
-    }
-    .pill .dot {
-      width: 5px;
-      height: 5px;
-    }
+    .meta { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; align-items:center; margin-top:8px; color:#222; font-weight:600; font-size:11px; }
+    .pill { font-size:11px; padding:4px 8px; border-radius:8px; }
+    .pill .dot { width:5px; height:5px; }
   }
   @media (max-width: 1100px){
     .has-panel .page-wrap{ grid-template-columns: 1fr; }
     .side-panel{ position:static; max-height:none; }
   }
   .print-brand { display: none; }
-  @media print {
-    .print-brand {
-      display: none !important;
-    }
+  @media print { .print-brand { display: none !important; } }
 
-  }
   /* highlight in detail view */
   .hl{ background:var(--orange-faint); border-radius:3px; padding:0 2px; }
 </style>
@@ -181,15 +120,38 @@
   <div class="page-wrap">
     <!-- Left Panel -->
     <aside class="side-panel" {% if search_summary or list_results or all_results or results %}style="display:block"{% endif %}>
+      {# --- BUILD SEARCH CRITERIA IF search_summary IS MISSING (AI path) --- #}
+      {% set _q = request.args.get('q') %}
+      {% set _industries = request.args.getlist('industry') %}
+      {% set _sections   = request.args.getlist('section') %}
+      {% set _rules      = request.args.getlist('rule') %}
+      {% set _parties    = request.args.getlist('party') %}
+      {% set _s1s        = request.args.getlist('s1') %}
+      {% set _s2s        = request.args.getlist('s2') %}
+
       {% if search_summary %}
         <div class="crit">Search Criteria</div>
         <div class="box" style="background:#fff">{{ search_summary }}</div>
         <div class="section-divider"></div>
+      {% elif _q or _industries or _sections or _rules or _parties or _s1s or _s2s %}
+        <div class="crit">Search Criteria</div>
+        <div class="box" style="background:#fff">
+          {% if _q %}<div><b>Search:</b> {{ _q }}</div>{% endif %}
+          {% if _industries %}<div><b>Industry:</b> {{ _industries|join(', ') }}</div>{% endif %}
+          {% if _sections %}<div><b>Section:</b> {{ _sections|join(', ') }}</div>{% endif %}
+          {% if _rules %}<div><b>Rule:</b> {{ _rules|join(', ') }}</div>{% endif %}
+          {% if _parties %}<div><b>Party:</b> {{ _parties|join(', ') }}</div>{% endif %}
+          {% if _s1s %}<div><b>Subject 1:</b> {{ _s1s|join(', ') }}</div>{% endif %}
+          {% if _s2s %}<div><b>Subject 2:</b> {{ _s2s|join(', ') }}</div>{% endif %}
+        </div>
+        <div class="section-divider"></div>
       {% endif %}
+
       {% if list_results or all_results or results %}
         <h4>Results</h4>
         <div class="mini">
-          {% set _panel_results = list_results or all_results or results or [] %}
+          {# Prefer list_results; else, IF q exists (AI search), use results; ELSE fall back to all_results/results #}
+          {% set _panel_results = (list_results or (results if _q else (all_results or results)) or []) %}
           {% for it in _panel_results %}
             <div class="item">
               <a class="panel-case" href="{{ url_for('public_case_detail', rid=it.id,
@@ -210,6 +172,7 @@
         </div>
       {% endif %}
     </aside>
+
     <!-- Main -->
     <div>
       <!-- (removed in print) -->
@@ -230,6 +193,7 @@
             Print
           </button>
         </div>
+
         <!-- Hero -->
         <div class="hero-case">
           <div class="case-no">Case No.: <strong>{{ r.case_law_number }}</strong></div>
@@ -248,6 +212,7 @@
             {% if r.rule %}<span class="pill"><span class="dot"></span>Rule: {{ r.rule }}</span>{% endif %}
           </div>
         </div>
+
         <!-- Summary / Headnotes -->
         <div class="box" id="section-headnotes">
           <h3 class="section">Summary / Headnotes</h3>
@@ -256,6 +221,7 @@
           </div>
         </div>
         <div class="section-divider"></div>
+
         <!-- Question Answered -->
         {% if r.question_answered %}
         <div class="box" id="section-qa">
@@ -264,6 +230,7 @@
         </div>
         <div class="section-divider"></div>
         {% endif %}
+
         <!-- Citations -->
         {% if citations_text %}
         <div class="box" id="section-citations">
@@ -285,10 +252,10 @@
         </div>
         <div class="section-divider"></div>
         {% endif %}
+
         <!-- Full Case Law -->
         {% if full_case_html %}
         <div id="section-fullcase">
-          <!-- h3.section pad-left removed per requirement -->
           <div class="prose fullcase js-hl-scope" id="fullCase">{{ full_case_html|safe }}</div>
           <div class="print-endcase" style="display:none;">
             <hr><div class="case">Case No.: {{ r.case_law_number }}</div>
@@ -309,6 +276,7 @@
     if (window.matchMedia && window.matchMedia('print').matches) return;
     el.innerHTML = el.innerHTML.replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br>');
   })();
+
   // CITATIONS: linkify AGST case numbers
   (function(){
     var ul = document.getElementById('citList');
@@ -324,6 +292,7 @@
       if (replaced !== html) li.innerHTML = replaced;
     });
   })();
+
   // Highlight search phrase in detail view
   (function(){
     const params = new URLSearchParams(location.search);

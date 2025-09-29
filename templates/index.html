@@ -101,56 +101,11 @@
     font-size:14px; line-height:1.6; text-align: justify;
   }
   /* --- AI Explanation Styling --- */
-  /* Wrapper div to create the box */
-  .ai-explanation-wrapper {
-      background-color: #f5f5f5; /* Light gray background */
-      border: 1px solid #ddd;    /* Border */
-      border-radius: 8px;        /* Optional: rounded corners */
-      padding: 15px;             /* Space inside the box */
-      margin-top: 20px;          /* Space above the box */
-      margin-bottom: 20px;       /* Space below the box */
-      /* Ensure it adapts to content width if needed, or set a max-width */
-      /* max-width: 800px; */
-  }
-  /* Main content styling - mimic summary headnotes */
-  .ai-explanation {
-      /* Use the same font family as summary headnotes and the rest of your site */
-      font-family: "Aptos", "Segoe UI", system-ui, -apple-system, "Roboto", "Arial", sans-serif;
-      /* Use the same base font size as summary headnotes (you used 10pt in .ai-explanation before) */
-      font-size: 10pt;
-      /* Increase line height for better readability and spacing between lines */
-      line-height: 1.6; /* Adjust this value (e.g., 1.5, 1.7) to your preference */
-      /* Justify text as requested and seen in summary headnotes */
-      text-align: justify;
-      /* Ensure text color is readable, usually black or dark gray */
-      color: #333;
-  }
-  /* Styling for individual sections (Provisions, Circulars) */
-  .ai-section {
-      /* Add space between the main sections (Provisions and Circulars) */
-      margin-top: 1em;
-      /* Ensure the first section doesn't have extra top margin */
-      /* This can be handled by structuring HTML or using :first-child */
-  }
-  /* Styling for the paragraphs within each section */
-  .ai-content-paragraph {
-      /* The line-height is primarily controlled by .ai-explanation, */
-      /* but you can add specific paragraph margins here if needed */
-      /* margin-top: 0.5em; */ /* Example: small space above each paragraph if multiple */
-      /* The text within should inherit font, size, line-height, and justification */
-  }
-  /* Styling for the disclaimer */
-  .ai-disclaimer {
-      /* Add space above the disclaimer */
-      margin-top: 1.5em; /* Slightly larger space before disclaimer */
-      /* Italicize the disclaimer text */
-      font-style: italic;
-      /* Optionally, make the disclaimer text slightly smaller */
-      /* font-size: 0.9em; */
-      /* Ensure the disclaimer text aligns with the rest */
-      text-align: justify;
-  }
-  /* --- End AI Explanation Styling --- */
+  .ai-explanation-wrapper { background-color: #f5f5f5; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-top: 20px; margin-bottom: 20px; }
+  .ai-explanation { font-family: "Aptos","Segoe UI",system-ui,-apple-system,"Roboto","Arial",sans-serif; font-size: 10pt; line-height: 1.6; text-align: justify; color: #333; }
+  .ai-section { margin-top: 1em; }
+  .ai-content-paragraph {}
+  .ai-disclaimer { margin-top: 1.5em; font-style: italic; text-align: justify; }
   /* ... other existing CSS rules ... */
   @media (max-width:900px){
     .grid-3{ grid-template-columns:1fr; }
@@ -250,7 +205,6 @@
       <button class="btn btn-orange" type="submit" id="filterSearchBtn">Search</button>
       <a class="btn btn-black" href="{{ url_for('home') }}">Reset</a>
       <!-- Summarize button -->
-      <!-- CHANGED: Increased cap for summarize results from 20 to 60 (backend handles capping) -->
       <button class="btn btn-orange" type="button" id="summarizeBtn" title="Summarize current results (up to 10 cases)">AI summary of the results</button>
     </div>
   </form>
@@ -266,7 +220,6 @@
   <form method="get" id="aiSearchForm">
     <div class="searchline">
       <input type="hidden" name="ai_search" value="true">
-      <!-- CHANGED PLACEHOLDER TEXT HERE -->
       <textarea name="ai_q" rows="2" placeholder="Search for case laws using natural language.">{{ ai_q }}</textarea>
       <button class="btn btn-orange" type="submit" id="aiSearchBtn">Search</button>
       <a class="btn btn-black" href="{{ url_for('home') }}">Reset</a>
@@ -278,8 +231,6 @@
 </div>
 {% set has_search = (q or selected.industry or selected.section or selected.rule or selected.party or selected.s1 or selected.s2 or ai_q) %}
 {% if has_search %}
-  <!-- REMOVED AI EXPLANATION SECTION HERE -->
-  <!-- Summary box (appears on click) -->
   <div class="ai-response" id="summaryBox" style="display:none;">
     <h3>Summary of key cases</h3>
     <div class="ai-text" id="summaryText"></div>
@@ -294,7 +245,7 @@
     <button class="btn btn-orange" id="resetRefineBtn">Reset Refine</button>
   </div>
   <div class="results" id="results"
-       data-q="{{ q|e }}"
+       data-q="{{ (q or ai_q)|e }}"
        data-pages="{{ pages }}"
        data-cur="{{ page }}">
     {% for r in results %}
@@ -426,10 +377,14 @@
                      party=request.args.getlist('party'),
                      s1=request.args.getlist('s1'),
                      s2=request.args.getlist('s2'),
-                     q=request.args.get('q'),
+                     q=(request.args.get('q') or request.args.get('ai_q') or ai_q),
+                     ai_search=request.args.get('ai_search') or 'true',
+                     result_ids=results|map(attribute='id')|join(','),
                      page=page) }}">
              More Details
           </a>
+
+
         </div>
       </div>
     {% endfor %}
@@ -646,16 +601,13 @@
     });
 
     // CHANGED: Limit the number of results displayed for AI search to 50
-    // This affects the client-side refine/pagination logic's baseline set
     const urlParams = new URLSearchParams(window.location.search);
     const isAISearch = urlParams.get('ai_search') === 'true';
     if (isAISearch && allCards.length > 50) {
         console.log(`[Client] AI Search detected. Limiting displayed results from ${allCards.length} to 50.`);
-        allCards = allCards.slice(0, 50); // Take the first 50 results
-        // Update the total count label to reflect the limit
+        allCards = allCards.slice(0, 50);
         setCountLabel(allCards.length);
     }
-
 
     // IMPORTANT FIX: do NOT filter away server results by the full phrase.
     // Keep all results, only use qPhrase for highlighting.
@@ -803,13 +755,7 @@
         summarizeBtn.disabled = true;
         if (loading) loading.style.display = 'flex';
         const url = new URL(window.location.origin + "/summarize_results" + window.location.search);
-        // CHANGED: Pass a higher cap value (e.g., 60) to the backend summarize endpoint
-        // The backend function `_fetch_rows_for_current_filters` has a `cap` parameter.
-        // We can pass this via query parameters if the backend is set up to read it.
-        // If not, the backend default (20) or its internal logic will apply.
-        // Let's assume the backend can accept a 'cap' parameter.
-        url.searchParams.set('cap', '60'); // Request up to 60 cases for summarization
-
+        url.searchParams.set('cap', '60');
         const res = await fetch(url.toString(), { method: 'GET' });
         const data = await res.json();
         const box  = document.getElementById('summaryBox');

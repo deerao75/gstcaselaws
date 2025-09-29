@@ -104,7 +104,7 @@ CANDIDATE_WIDE    = int(os.getenv("HYBRID_CANDIDATES_WIDE", "800"))
 # Vector-only recall sweep controls
 VECTOR_SWEEP_LIMIT = int(os.getenv("VECTOR_SWEEP_LIMIT", "1200"))  # how many rows to scan for pure vector recall
 VECTOR_TOPK        = int(os.getenv("VECTOR_TOPK", "250"))          # top-k vector-only hits to merge
-VEC_ONLY_MIN       = float(os.getenv("VEC_ONLY_MIN", "0.55"))      # min cosine to keep vector-only hits (Lowered as discussed)
+VEC_ONLY_MIN       = float(os.getenv("VEC_ONLY_MIN", "0.30"))      # min cosine to keep vector-only hits (Lowered as discussed)
 
 
 # Predefined admin users: email -> hashed_password
