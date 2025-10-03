@@ -65,10 +65,11 @@
       width: 18mm !important; height: auto !important;
       opacity: 0.9; z-index: 1000;
     }
+
     @page {
       @bottom-center {
         content: "www.acergst.com | Page " counter(page);
-        font-family: sans-serif; font-size: 10px; color: #555; white-space: nowrap;
+        font-family: sans-serif; font-size: 15px; color: #555; white-space: nowrap;
       }
     }
     *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; box-shadow:none !important; }
@@ -162,6 +163,8 @@
                                                      s1=request.args.getlist('s1'),
                                                      s2=request.args.getlist('s2'),
                                                      q=request.args.get('q'),
+                                                     ai_search=request.args.get('ai_search'),
+                                                      ai_q=request.args.get('ai_q'),
                                                      page=request.args.get('page')) }}">
                 Case No.: {{ it.case_law_number }}
               </a>

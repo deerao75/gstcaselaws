@@ -9,6 +9,9 @@ import os, re, io, ssl, json, time, hashlib, math
 import pandas as pd
 from collections import defaultdict
 import numpy as np
+import smtplib
+from email.mime.text import MIMEText
+from email.header import Header
 
 
 # ======================= FLASK & UPLOAD CONFIG =======================
@@ -785,24 +788,44 @@ def home():
 # --------- Public case detail ---------
 @app.get("/case/<int:rid>")
 def public_case_detail(rid: int):
+    # 1) Fetch the hero case row
     with ENGINE.connect() as conn:
         row = conn.execute(select(Acer).where(Acer.c.id == rid)).mappings().first()
-    if not row: abort(404)
+    if not row:
+        abort(404)
     r = dict(row)
-    head_plain = _strip_all_html(r.get("summary_head_note") or "")
-    headnotes_html = _bold_held_and_prefix(head_plain)
-    qa_plain   = _strip_all_html(r.get("question_answered") or "")
-    qa_items   = _split_points(qa_plain)
-    citations_text = _strip_all_html(r.get("citation") or "")
-    full_case_html = r.get("full_case_law") or ""
-    args = request.args
-    sel_industries = args.getlist("industry")
-    sel_sections   = args.getlist("section")
-    sel_rules      = args.getlist("rule")
-    sel_parties    = args.getlist("party")
-    sel_s1         = args.getlist("s1")
-    sel_s2         = args.getlist("s2")
-    q              = (args.get("q") or "").strip()
+
+    # 2) Prepare hero sections (unchanged)
+    head_plain      = _strip_all_html(r.get("summary_head_note") or "")
+    headnotes_html  = _bold_held_and_prefix(head_plain)
+    qa_plain        = _strip_all_html(r.get("question_answered") or "")
+    qa_items        = _split_points(qa_plain)
+    citations_text  = _strip_all_html(r.get("citation") or "")
+    full_case_html  = r.get("full_case_law") or ""
+
+    # 3) Rebuild EXACT SAME result set “slice” the user saw on the list page
+    #    (respect filters + q or ai_q, and use identical paging rules)
+    args            = request.args
+    sel_industries  = args.getlist("industry")
+    sel_sections    = args.getlist("section")
+    sel_rules       = args.getlist("rule")
+    sel_parties     = args.getlist("party")
+    sel_s1          = args.getlist("s1")
+    sel_s2          = args.getlist("s2")
+    q               = (args.get("q") or "").strip()
+
+    is_ai_search    = (args.get("ai_search") == "true")
+    ai_q            = (args.get("ai_q") or "").strip() if is_ai_search else ""
+
+    # paging must mirror home(): 25 for AI tab, else 10
+    per_page        = 25 if is_ai_search and ai_q else 10
+    try:
+        page = max(int(args.get("page", 1) or 1), 1)
+    except Exception:
+        page = 1
+    offset          = (page - 1) * per_page
+
+    # base filters (keep as in home())
     clauses = []
     if sel_industries: clauses.append(Acer.c.industry_sector.in_(sel_industries))
     if sel_sections:   clauses.append(Acer.c.section.in_(sel_sections))
@@ -810,29 +833,76 @@ def public_case_detail(rid: int):
     if sel_parties:    clauses.append(Acer.c.name_of_party.in_(sel_parties))
     if sel_s1:         clauses.append(Acer.c.subject_matter1.in_(sel_s1))
     if sel_s2:         clauses.append(Acer.c.subject_matter2.in_(sel_s2))
-    if q:              clauses.append(_nlq_clause(q))
-    where_expr = and_(*clauses) if clauses else text("1=1")
-    with ENGINE.connect() as conn:
-        rows = conn.execute(
-            select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
-            .where(where_expr).order_by(Acer.c.id.desc())
-        ).mappings().all()
-    list_results = [dict(x) for x in rows]
+
+    # Query logic:
+    # - If AI search: mimic home() AI path = phrase-first, then token fallback
+    # - Else if normal q: use _nlq_clause(q) (as home() standard path)
+    where_expr = None
+    if is_ai_search and ai_q:
+        clause_phrase = _phrase_like_clause(ai_q)
+        where_phrase  = and_(*(clauses + [clause_phrase])) if clauses else clause_phrase
+
+        # try phrase slice first
+        with ENGINE.connect() as conn:
+            rows_phrase = conn.execute(
+                select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
+                .where(where_phrase).order_by(Acer.c.id.desc())
+                .limit(per_page).offset(offset)
+            ).mappings().all()
+            total_phrase = conn.execute(
+                select(func.count()).select_from(Acer).where(where_phrase)
+            ).scalar_one()
+
+        if rows_phrase:
+            list_results = [dict(x) for x in rows_phrase]
+        else:
+            # fallback: tokens
+            clause_tokens = _word_like_clause(ai_q)
+            where_tokens  = and_(*(clauses + [clause_tokens])) if clauses else clause_tokens
+            with ENGINE.connect() as conn:
+                rows_tokens = conn.execute(
+                    select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
+                    .where(where_tokens).order_by(Acer.c.id.desc())
+                    .limit(per_page).offset(offset)
+                ).mappings().all()
+            list_results = [dict(x) for x in rows_tokens]
+    else:
+        # normal search or pure filters
+        if q:
+            clauses.append(_nlq_clause(q))
+        where_expr = and_(*clauses) if clauses else text("1=1")
+        with ENGINE.connect() as conn:
+            rows = conn.execute(
+                select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
+                .where(where_expr).order_by(Acer.c.id.desc())
+                .limit(per_page).offset(offset)
+            ).mappings().all()
+        list_results = [dict(x) for x in rows]
+
+    # 4) Build the same Search Criteria line, now also showing AI query (if any)
+    search_bits = []
+    if sel_industries: search_bits.append("Industry: " + ", ".join(sel_industries))
+    if sel_sections:   search_bits.append("Section: " + ", ".join(sel_sections))
+    if sel_rules:      search_bits.append("Rule: " + ", ".join(sel_rules))
+    if sel_parties:    search_bits.append("Party: " + ", ".join(sel_parties))
+    if sel_s1:         search_bits.append("Subject 1: " + ", ".join(sel_s1))
+    if sel_s2:         search_bits.append("Subject 2: " + ", ".join(sel_s2))
+    if is_ai_search and ai_q:
+        search_bits.append(f'AI Search: "{ai_q}"')
+    elif q:
+        search_bits.append(f'Search: "{q}"')
+
     return render_template(
         "public_case_detail.html",
-        r=r, headnotes_html=headnotes_html, full_case_html=full_case_html,
-        citations_text=citations_text, qa_items=qa_items,
-        search_summary=" | ".join(filter(None, [
-            sel_industries and ("Industry: " + ", ".join(sel_industries)),
-            sel_sections   and ("Section: " + ", ".join(sel_sections)),
-            sel_rules      and ("Rule: " + ", ".join(sel_rules)),
-            sel_parties    and ("Party: " + ", ".join(sel_parties)),
-            sel_s1         and ("Subject 1: " + ", ".join(sel_s1)),
-            sel_s2         and ("Subject 2: " + ", ".join(sel_s2)),
-            q and f'Search: "{q}"'
-        ])),
+        r=r,
+        headnotes_html=headnotes_html,
+        full_case_html=full_case_html,
+        citations_text=citations_text,
+        qa_items=qa_items,
+        search_summary=" | ".join(search_bits),
         list_results=list_results,
     )
+
 
 # ======================= Summarize Results =======================
 def _fetch_rows_for_current_filters(args, cap=60):
@@ -1372,6 +1442,53 @@ def admin_bulk_upload():
 # ======================= Contact =======================
 @app.route("/contact", methods=["GET", "POST"])
 def contact():
+    if request.method == "POST":
+        name    = (request.form.get("name") or "").strip()
+        email   = (request.form.get("email") or "").strip()
+        subject = (request.form.get("subject") or "").strip() or "Website contact"
+        message = (request.form.get("message") or "").strip()
+
+        if not (name and email and message):
+            flash("Please fill in your name, email, and message.", "error")
+            return redirect(url_for("contact"))
+
+        # Build the email body
+        body = (
+            "You have a new contact form submission:\n\n"
+            f"Name: {name}\n"
+            f"Email: {email}\n"
+            f"Subject: {subject}\n\n"
+            "Message:\n"
+            f"{message}\n"
+        )
+
+        # Compose MIME email
+        msg = MIMEText(body, _subtype="plain", _charset="utf-8")
+        msg["Subject"] = Header(f"Contact Form: {subject}", "utf-8")
+        msg["From"]    = os.getenv("MAIL_USER", "info@acertax.com")
+        msg["To"]      = "info@acertax.com"
+        # Let replies go to the sender
+        if email:
+            msg["Reply-To"] = email
+
+        smtp_user = os.getenv("MAIL_USER", "info@acertax.com")
+        smtp_pass = os.getenv("MAIL_PASS")  # ← your Gmail App Password
+
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, ["info@acertax.com"], msg.as_string())
+            flash("Your message has been sent successfully!", "success")
+        except Exception as e:
+            # Common cause: no app password / wrong credentials / firewall
+            flash(f"Failed to send message: {e}", "error")
+
+        return redirect(url_for("contact"))
+
+    # GET: render page
     team = [
         {"name": "Jayaram Hiregange", "role": "Partner - IDT", "photo": "images/team1.jpg"},
         {"name": "Deepak Rao",        "role": "Partner - IDT", "photo": "images/team2.jpg"},
