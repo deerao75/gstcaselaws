@@ -114,6 +114,14 @@
 
   /* highlight in detail view */
   .hl{ background:var(--orange-faint); border-radius:3px; padding:0 2px; }
+
+  /* AI Summary box tweaks */
+  #aiSummaryBox { display:none; }
+  /* Use normal flow (not pre-wrap) and tighten margins just for the AI box */
+  #aiSummaryContent { white-space: normal; }
+  #aiSummaryContent p  { margin: 6pt 0 !important; }
+  #aiSummaryContent h4 { margin: 8pt 0 4pt !important; font-weight: 700; }
+
 </style>
 {% endblock %}
 {% block content %}
@@ -188,6 +196,165 @@
           <button type="button" class="back-btn"
                   onclick="if(history.length>1){history.back()}else{location.href='{{ url_for('home') }}'}">← Back</button>
           <div class="spacer"></div>
+          <!-- NEW: AI Summary button (placed before Print) -->
+          <button id="aiSummaryBtn" type="button" class="print-btn" title="AI Summary of the Case" onclick="generateAISummary()">
+            <svg class="print-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 3l1.9 3.9 4.3.6-3.1 3 0.7 4.3L12 13.7 8.2 14.8l0.7-4.3-3.1-3 4.3-.6L12 3z" stroke="#000" stroke-width="1.2"/>
+            </svg>
+            AI Summary of the Case
+          </button>
+          <script>
+          (function(){
+            // Show box only when needed
+            var boxEl = document.getElementById('aiSummaryBox');
+            if (boxEl) boxEl.style.display = 'none';
+
+            function escapeHtml(s){
+              return (s||'').replace(/[&<>"']/g, function(m){
+                return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
+              });
+            }
+
+            function printAISummary(){
+              var content = document.getElementById('aiSummaryContent');
+              if (!content || !(content.innerHTML || content.textContent)){
+                alert('Nothing to print yet. Generate the AI summary first.');
+                return;
+              }
+              var html = content.innerHTML && content.innerHTML.trim()
+                ? content.innerHTML
+                : ('<pre>'+escapeHtml(content.textContent || '')+'</pre>');
+              var caseNo = {{ r.case_law_number|tojson }};
+              var party  = {{ (r.case_name or r.name_of_party)|tojson }};
+              var w = window.open('', '_blank');
+              if (!w) return;
+              w.document.open();
+              w.document.write(
+                '<!doctype html><html><head><meta charset="utf-8"><title>AI Summary — ' + caseNo + '</title>' +
+                '<style>' +
+                  '.prose, .prose *{font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif !important; font-size:12pt !important; line-height:1.5 !important; text-align:justify; color:#000;}' +
+                  'body{margin:16mm;}' +
+                  '.print-head{ text-align:center; margin:0 0 8mm 0; }' +
+                  '.print-case{ font-size:14pt; font-weight:700; }' +
+                  '.print-party{ font-size:16pt; font-weight:700; margin-top:4mm; }' +
+                  '.print-footer{ position:fixed; bottom:8mm; left:0; right:0; text-align:center; font-size:10pt; color:#555; }' +
+                  '@media print{ .print-footer{ display:block; } }' +
+                '</style>' +
+                '</head><body>' +
+                  '<div class="print-head">' +
+                    '<div class="print-case">AI Summary — Case No.: ' + caseNo + '</div>' +
+                    '<div class="print-party">' + party + '</div>' +
+                  '</div>' +
+                  '<div class="prose">' + html + '</div>' +
+                  '<div class="print-footer">www.acergst.com</div>' +
+                '</body></html>'
+              );
+              w.document.close();
+              w.focus();
+              w.print();
+            }
+
+            function cleanAISummaryHTML(s){
+              if (!s) return '';
+              s = String(s).trim();
+              // Strip leading/trailing code fences like ```html … ```
+              s = s.replace(/^```[\w-]*\s*/i, '').replace(/\s*```$/i, '').replace(/```/g, '');
+              // Remove any extra model commentary like "This HTML summary …"
+              s = s.replace(/<p[^>]*>\s*This(?:\s+HTML)?\s+summary[\s\S]*?<\/p>\s*/gi, '');
+              s = s.replace(/\s*This(?:\s+HTML)?\s+summary[\s\S]*$/i, '');
+              // Collapse empty paragraphs
+              s = s.replace(/<p>\s*<\/p>/gi, '');
+              return s;
+            }
+
+            function undoAISummary(){
+              var box = document.getElementById('aiSummaryBox');
+              var out = document.getElementById('aiSummaryContent');
+              var statusEl = document.getElementById('aiStatus');
+              if (out) out.innerHTML = '';
+              if (statusEl) statusEl.textContent = '';
+              if (box) box.style.display = 'none';
+              // scroll back to headnotes, if present
+              var hn = document.getElementById('section-headnotes');
+              if (hn) { try { hn.scrollIntoView({ behavior:'smooth', block:'start' }); } catch(e){} }
+            }
+
+            function generateAISummary(){
+              var btn      = document.getElementById('aiSummaryBtn');
+              var box      = document.getElementById('aiSummaryBox');
+              var statusEl = document.getElementById('aiStatus');
+              var out      = document.getElementById('aiSummaryContent');
+              var fullCase = document.getElementById('fullCase');
+
+              var caseName   = {{ (r.case_name or r.name_of_party)|tojson }};
+              var caseNumber = {{ r.case_law_number|tojson }};
+              var caseText   = '';
+
+              if (fullCase){
+                caseText = (fullCase.innerText || fullCase.textContent || '').trim();
+              }
+
+              if (!caseText){
+                if (box) {
+                  box.style.display = 'block';
+                  out.textContent = 'Full case text is not available on this page. Please ensure the full case is loaded.';
+                }
+                return;
+              }
+
+              if (box) box.style.display = 'block';
+              if (statusEl){ statusEl.textContent = 'Summarising…'; box.setAttribute('aria-busy', 'true'); }
+              if (btn){ btn.disabled = true; btn.style.opacity = 0.7; }
+
+              fetch('{{ url_for("generate_ai_summary") if false else "/api/generate_ai_summary" }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  case_text: caseText,
+                  case_name: caseName,
+                  case_number: caseNumber
+                })
+              })
+              .then(function(res){ return res.json(); })
+              .then(function(data){
+                if (data && data.error){
+                  out.textContent = 'Error: ' + (data.error || 'Unable to generate summary.');
+                  return;
+                }
+                if (data && (data.summary_html || data.html)){
+                  var html = cleanAISummaryHTML(data.summary_html || data.html);
+                  out.innerHTML = html;
+                  return;
+                }
+                var txt = (data && (data.summary || data.content || data.result)) || 'No summary received.';
+                out.textContent = txt;
+              })
+              .catch(function(err){
+                out.textContent = 'Error: ' + (err && err.message ? err.message : 'Unexpected failure.');
+              })
+              .finally(function(){
+                if (statusEl){ statusEl.textContent = ''; box.setAttribute('aria-busy', 'false'); }
+                if (btn){ btn.disabled = false; btn.style.opacity = 1; }
+                try { box.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch(e){}
+              });
+            }
+
+            // Make them available to inline onclick too
+            window.generateAISummary = generateAISummary;
+            window.printAISummary    = printAISummary;
+            window.undoAISummary     = undoAISummary;
+
+            // Also wire the click via JS
+            document.addEventListener('DOMContentLoaded', function(){
+              var b = document.getElementById('aiSummaryBtn');
+              if (b && !b.dataset._aiBound) {
+                b.addEventListener('click', window.generateAISummary);
+                b.dataset._aiBound = '1';
+              }
+            });
+          })();
+          </script>
+
           <button class="print-btn" title="Print" onclick="window.print()">
             <svg class="print-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M6 9V3h12v6M6 14H5a 2 2 0 0 1-2-2v-1a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1" stroke="#000" stroke-width="1.5"/>
@@ -223,6 +390,19 @@
             {{ (r.get('summary_head_note') or r.get('summary_full') or r.get('Head Notes')) | safe }}
           </div>
         </div>
+
+        <!-- NEW: AI Summary box (hidden until button clicked) -->
+        <div class="box" id="aiSummaryBox" aria-live="polite" aria-busy="false">
+          <h3 class="section">AI Summary of the Case</h3>
+          <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">
+            <button type="button" class="print-btn" id="aiPrintBtn" onclick="printAISummary()" title="Print AI Summary">🖨️ Print Summary</button>
+            <!-- NEW: Undo button -->
+            <button type="button" class="print-btn" id="aiUndoBtn" onclick="undoAISummary()" title="Undo AI Summary">↩ Undo Summary</button>
+            <span id="aiStatus" style="font-size:12px;color:#444;"></span>
+          </div>
+          <div class="prose" id="aiSummaryContent"></div>
+        </div>
+
         <div class="section-divider"></div>
 
         <!-- Question Answered -->
@@ -321,5 +501,162 @@
       Array.from(scope.childNodes).forEach(walk);
     });
   })();
+
+  // ===== AI SUMMARY: fetch summary and show box =====
+  (function initAISummaryBox(){
+    var box = document.getElementById('aiSummaryBox');
+    if (box) { box.style.display = 'none'; } // keep hidden until invoked
+  })();
+
+  function generateAISummary(){
+    var btn = document.getElementById('aiSummaryBtn');
+    var box = document.getElementById('aiSummaryBox');
+    var statusEl = document.getElementById('aiStatus');
+    var out = document.getElementById('aiSummaryContent');
+    var fullCaseEl = document.getElementById('fullCase');
+
+    // Gather inputs
+    var caseName = {{ (r.case_name or r.name_of_party)|tojson }};
+    var caseNumber = {{ r.case_law_number|tojson }};
+    var caseText = '';
+    if (fullCaseEl){
+      // Use visible full case law (already loaded on page)
+      caseText = fullCaseEl.innerText || fullCaseEl.textContent || '';
+      caseText = caseText.trim();
+    }
+
+    if (!caseText){
+      // If the full case is not present on the page, show a helpful message
+      var msg = 'Full case text is not available on this page. Please ensure the full case is loaded.';
+      if (box) {
+        box.style.display = 'block';
+        out.textContent = msg;
+      }
+      return;
+    }
+
+    // UI: show box, set busy state
+    if (box) box.style.display = 'block';
+    if (statusEl){ statusEl.textContent = 'Summarising…'; box.setAttribute('aria-busy', 'true'); }
+    if (btn){ btn.disabled = true; btn.style.opacity = 0.7; }
+
+    // Call server route expected to create structured summary
+    fetch('{{ url_for("generate_ai_summary") if false else "/api/generate_ai_summary" }}', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        case_text: caseText,
+        case_name: caseName,
+        case_number: caseNumber
+      })
+    })
+    .then(function(res){ return res.json(); })
+    .then(function(data){
+      // Accept a few common payload shapes
+      var txt = '';
+      if (data && data.error){
+        txt = 'Error: ' + (data.error || 'Unable to generate summary.';
+      } else if (data && (data.summary_html || data.html)){
+        txt = data.summary_html || data.html;
+        // trust server HTML minimally (if provided)
+        // clean trailing commentary and fences
+        txt = txt ? txt.toString() : '';
+        txt = txt.replace(/^```[\w-]*\s*/i, '').replace(/\s*```$/i, '').replace(/```/g, '');
+        txt = txt.replace(/<p[^>]*>\s*This(?:\s+HTML)?\s+summary[\s\S]*?<\/p>\s*/gi, '');
+        txt = txt.replace(/\s*This(?:\s+HTML)?\s+summary[\s\S]*$/i, '');
+        out.innerHTML = txt;
+        return;
+      } else if (data && (data.summary || data.content || data.result)){
+        txt = data.summary || data.content || data.result;
+      } else {
+        txt = 'No summary received.';
+      }
+
+      // Default: render as text
+      out.textContent = txt;
+    })
+    .catch(function(err){
+      out.textContent = 'Error: ' + (err && err.message ? err.message : 'Unexpected failure.');
+    })
+    .finally(function(){
+      if (statusEl){ statusEl.textContent = ''; box.setAttribute('aria-busy', 'false'); }
+      if (btn){ btn.disabled = false; btn.style.opacity = 1; }
+      // Scroll the box into view
+      try { box.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch(e){}
+    });
+  }
+
+  function printAISummary(){
+    var content = document.getElementById('aiSummaryContent');
+    if (!content || !(content.innerHTML || content.textContent)){
+      alert('Nothing to print yet. Generate the AI summary first.');
+      return;
+    }
+    var html  = content.innerHTML && content.innerHTML.trim()
+      ? content.innerHTML
+      : ('<pre>'+escapeHtml(content.textContent || '')+'</pre>');
+
+    var caseNo = {{ r.case_law_number|tojson }};
+    var party  = {{ (r.case_name or r.name_of_party)|tojson }};
+
+    var w = window.open('', '_blank'); if (!w) return;
+    w.document.open();
+    w.document.write(
+      '<!doctype html><html><head><meta charset="utf-8">' +
+      '<title>AI Summary — ' + caseNo + '</title>' +
+      '<style>' +
+        '.prose, .prose *{font-family:"Aptos","Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif !important;' +
+        ' font-size:12pt !important; line-height:1.5 !important; text-align:justify; color:#000;}' +
+        'body{margin:16mm;}' +
+        '.print-head{ text-align:center; margin:0 0 8mm 0; }' +
+        '.print-case{ font-size:14pt; font-weight:700; }' +
+        '.print-party{ font-size:16pt; font-weight:700; margin-top:4mm; }' +
+        '.print-footer{ position:fixed; bottom:8mm; left:0; right:0; text-align:center; font-size:10pt; color:#555; }' +
+        '@media print{ .print-footer{ display:block; } }' +
+      '</style>' +
+      '</head><body>' +
+        '<div class="print-head">' +
+          '<div class="print-case">AI Summary — Case No.: ' + caseNo + '</div>' +
+          '<div class="print-party">' + party + '</div>' +
+        '</div>' +
+        '<div class="prose">' + html + '</div>' +
+        '<div class="print-footer">www.acergst.com</div>' +
+      '</body></html>'
+    );
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
+  function undoAISummary(){
+    var box = document.getElementById('aiSummaryBox');
+    var out = document.getElementById('aiSummaryContent');
+    var statusEl = document.getElementById('aiStatus');
+    if (out) out.innerHTML = '';
+    if (statusEl) statusEl.textContent = '';
+    if (box) box.style.display = 'none';
+    var hn = document.getElementById('section-headnotes');
+    if (hn) { try { hn.scrollIntoView({ behavior:'smooth', block:'start' }); } catch(e){} }
+  }
+
+  function escapeHtml(s){
+    return (s||'').replace(/[&<>"']/g, function(m){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
+    });
+  }
+
+  // Expose to inline handlers (guards prevent double-define)
+  if (typeof window.generateAISummary !== 'function') window.generateAISummary = generateAISummary;
+  if (typeof window.printAISummary    !== 'function') window.printAISummary    = printAISummary;
+  if (typeof window.undoAISummary     !== 'function') window.undoAISummary     = undoAISummary;
+
+  // Safety: also attach the click via JS (in case inline onclick is ignored)
+  document.addEventListener('DOMContentLoaded', function(){
+    var b = document.getElementById('aiSummaryBtn');
+    if (b && !b.dataset._aiBound) {
+      b.addEventListener('click', window.generateAISummary);
+      b.dataset._aiBound = '1';
+    }
+  });
 </script>
 {% endblock %}

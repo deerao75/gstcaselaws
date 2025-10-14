@@ -1556,6 +1556,372 @@ def _diag_test_login():
         "matches_stored_hash": bool(stored and stored == computed)
     }, 200
 
+# ---------- AI Summary API ----------
+# Drop this into app.py (imports at top: from flask import request, jsonify)
+# Assumes you already have `_openai_chat_json(messages)` helper.
+# No other app behavior is changed.
+
+import re
+import html
+
+import os, re, html
+from flask import request, jsonify
+
+@app.route('/api/generate_ai_summary', methods=['POST'])
+def generate_ai_summary():
+    """
+    Robust, SDK-version-agnostic summary endpoint.
+    - Works with openai>=1.0 (new client) and 0.27/0.28 (legacy).
+    - Extracts assistant text directly; doesn't depend on _extract_ai_text.
+    """
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    case_text   = (data.get('case_text') or '').strip()
+    case_html   = (data.get('case_html') or '').strip()
+    case_id     = (str(data.get('case_id') or '').strip() or None)
+    case_number = (data.get('case_number') or '').strip()
+    case_name   = (data.get('case_name') or '').strip()
+
+    if not case_text and case_html:
+        # minimal HTML → text
+        s = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', case_html)
+        s = re.sub(r'(?i)</\s*p\s*>', '\n', s)
+        s = re.sub(r'(?i)<\s*p[^>]*>', '', s)
+        s = re.sub(r'<[^>]+>', '', s)
+        s = html.unescape(s)
+        s = re.sub(r'\n{3,}', '\n\n', s).strip()
+        case_text = s
+
+    # If you want DB fallback, plug it here (kept no-op to avoid wider changes)
+    # if not case_text and (case_id or case_number):
+    #     case_text = ( _fetch_case_fulltext_from_db(case_id=case_id, case_number=case_number) or "" ).strip()
+
+    if not case_text:
+        return jsonify({"error": "No case text provided"}), 400
+
+    # truncate to keep tokens sane
+    if len(case_text) > 60000:
+        cut = case_text.rfind("\n\n", 0, 60000)
+        case_text = (case_text[:cut] if cut != -1 else case_text[:60000]).strip()
+
+    user_prompt = f"""
+You are given the full text of an Indian court judgment. Write a clean HTML summary with exactly these section headings in order:
+1) Facts
+2) Issues
+3) Discussion (Arguments & Court's Observations)
+4) Decision
+
+Rules:
+- Use <h4> for each heading exactly as named above.
+- Under each heading, write 1–3 short paragraphs in neutral, precise legal prose. No bullet points.
+- Base everything strictly on the provided text; do not add external facts or citations.
+- Do not include any preface or conclusion outside these sections.
+
+Case Name: {case_name or '—'}
+Case Number: {case_number or '—'}
+
+Full Case Law Text:
+{case_text}
+""".strip()
+
+    # Ensure API key exists (gives a clear error instead of silent empty content)
+    if not os.getenv("OPENAI_API_KEY"):
+        return jsonify({"error": "Missing OPENAI_API_KEY in environment"}), 500
+
+    # ---- Call OpenAI (new SDK first, then legacy fallback) ----
+    assistant_text = ""
+    err_new = None
+
+    # Try new SDK
+    try:
+        from openai import OpenAI  # openai>=1.0
+        client = OpenAI()
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a concise Indian GST legal analyst who writes clean HTML."},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=1200,
+        )
+        # new SDK object -> extract content
+        try:
+            assistant_text = (resp.choices[0].message.content or "").strip()
+        except Exception:
+            # last resort: model_dump
+            try:
+                d = resp.model_dump()
+                assistant_text = (d.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+            except Exception:
+                assistant_text = ""
+    except Exception as e:
+        err_new = e
+
+    # Legacy fallback
+    if not assistant_text:
+        try:
+            import openai  # legacy 0.27/0.28
+            model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+            resp = openai.ChatCompletion.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a concise Indian GST legal analyst who writes clean HTML."},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=1200,
+            )
+            # legacy object can be OpenAIObject
+            try:
+                assistant_text = (resp["choices"][0]["message"]["content"] or "").strip()
+            except Exception:
+                try:
+                    assistant_text = (resp.choices[0].message.content or "").strip()
+                except Exception:
+                    # last resort: dict conversion if available
+                    try:
+                        d = resp.to_dict_recursive()
+                        assistant_text = (d.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+                    except Exception:
+                        assistant_text = ""
+        except Exception as e_legacy:
+            # If both fail, bubble the clearer new-SDK error if we have it, else legacy one
+            return jsonify({"error": f"Failed to generate summary: {err_new or e_legacy}"}), 500
+
+    if not assistant_text:
+        # Surface a helpful hint instead of a blank error
+        hint = "Model returned empty content. Check model name, token limits, or org policy."
+        return jsonify({"error": f"AI did not return any content. {hint}"}), 502
+
+    # Tidy minimal: normalize headings & remove lists if any
+    def tidy(h: str) -> str:
+        if not h: return ""
+        # normalize possible bold headings to <h4>
+        heads = [
+            "Facts",
+            "Issues",
+            "Discussion (Arguments & Court's Observations)",
+            "Decision",
+        ]
+        for head in heads:
+            patterns = [
+                rf'(?is)<\s*b[^>]*>\s*{re.escape(head)}\s*<\/\s*b\s*>',
+                rf'(?is)<\s*strong[^>]*>\s*{re.escape(head)}\s*<\/\s*strong\s*>',
+                rf'(?im)^\s*{re.escape(head)}\s*:\s*',
+            ]
+            for p in patterns:
+                new_h = re.sub(p, f'<h4>{head}</h4>', h, count=1)
+                if new_h != h:
+                    h = new_h
+                    break
+        # convert <li> to paragraphs; drop ul/ol
+        h = re.sub(r'(?is)<\s*li[^>]*>\s*(.*?)\s*<\/\s*li\s*>', r'<p>\1</p>', h)
+        h = re.sub(r'(?is)<\s*\/?\s*(ul|ol)\s*[^>]*>', '', h)
+        # strip script/style
+        h = re.sub(r'(?is)<\s*(script|style)[^>]*>.*?<\/\s*\1\s*>', '', h)
+        # wrap plain text
+        if '<' not in h and '>' not in h:
+            parts = [f'<p>{html.escape(p.strip())}</p>' for p in h.split('\n') if p.strip()]
+            h = ''.join(parts)
+        return h.strip()
+
+    summary_html = tidy(assistant_text)
+    if not summary_html:
+        return jsonify({"error": "AI did not return any content"}), 502
+
+    return jsonify({"summary_html": summary_html}), 200
+
+# ---------- Helpers (lightweight, no external deps) ----------
+
+def _html_to_text(s: str) -> str:
+    """Very simple HTML → text; preserves basic newlines."""
+    if not s:
+        return ""
+    # Replace <br> and <p> with newlines
+    s = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', s)
+    s = re.sub(r'(?i)</\s*p\s*>', '\n', s)
+    s = re.sub(r'(?i)<\s*p[^>]*>', '', s)
+    # Strip all other tags
+    s = re.sub(r'<[^>]+>', '', s)
+    # Unescape entities & collapse extra blank lines
+    s = html.unescape(s)
+    s = re.sub(r'\n{3,}', '\n\n', s).strip()
+    return s
+
+def _soft_truncate(s: str, max_chars: int = 60000) -> str:
+    if not s or len(s) <= max_chars:
+        return s or ""
+    # Cut at nearest paragraph boundary prior to max_chars (if possible)
+    cut = s.rfind("\n\n", 0, max_chars)
+    if cut == -1:
+        cut = max_chars
+    return s[:cut].strip()
+
+# ---- Replace your _extract_ai_text with this ----
+from collections.abc import Mapping
+
+def _extract_ai_text(ai_resp) -> str:
+    """
+    Extract text from OpenAI responses across:
+    - Legacy openai==0.27/0.28 (OpenAIObject, ChatCompletion)
+    - New openai>=1.0 (chat.completions & responses)
+    - Dict-like wrappers and our own wrapper
+    """
+    if ai_resp is None:
+        return ""
+
+    # 1) If already a plain string
+    if isinstance(ai_resp, str):
+        return ai_resp.strip()
+
+    # 2) Normalize to a dict if possible
+    d = None
+    try:
+        if isinstance(ai_resp, Mapping):  # plain dict or dict-like
+            d = ai_resp
+        elif hasattr(ai_resp, "to_dict_recursive"):  # legacy OpenAIObject
+            d = ai_resp.to_dict_recursive()
+        elif hasattr(ai_resp, "to_dict"):
+            d = ai_resp.to_dict()
+        elif hasattr(ai_resp, "model_dump"):  # pydantic models in new SDK
+            d = ai_resp.model_dump()
+    except Exception:
+        d = None
+
+    # 3) Our wrapper might have already placed the content in convenience keys
+    if d:
+        for key in ("summary_html", "html", "content", "text", "summary", "result", "output_text"):
+            val = d.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+
+        # New Chat Completions: choices[0].message.content
+        try:
+            msg = d["choices"][0]["message"].get("content")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+        except Exception:
+            pass
+
+        # Legacy Completions (text)
+        try:
+            txt = d["choices"][0].get("text")
+            if isinstance(txt, str) and txt.strip():
+                return txt.strip()
+        except Exception:
+            pass
+
+        # Responses API style: content as list of parts with "text"
+        # e.g., d["choices"][0]["message"]["content"] might be a list of {"type":"text","text": "..."}
+        try:
+            content = d.get("choices", [{}])[0].get("message", {}).get("content")
+            if isinstance(content, list):
+                parts = []
+                for c in content:
+                    if isinstance(c, Mapping):
+                        t = c.get("text") or c.get("value") or c.get("content")
+                        if isinstance(t, str) and t.strip():
+                            parts.append(t.strip())
+                if parts:
+                    return "\n".join(parts).strip()
+        except Exception:
+            pass
+
+        # Another Responses shape: d["content"] is a list of parts
+        try:
+            cont_list = d.get("content")
+            if isinstance(cont_list, list):
+                parts = []
+                for c in cont_list:
+                    if isinstance(c, Mapping):
+                        t = c.get("text") or c.get("value") or c.get("content")
+                        if isinstance(t, str) and t.strip():
+                            parts.append(t.strip())
+                if parts:
+                    return "\n".join(parts).strip()
+        except Exception:
+            pass
+
+    # 4) Last resort: access attributes (legacy objects) without dict conversion
+    #    ai_resp.choices[0].message.content
+    try:
+        ch0 = ai_resp.choices[0]
+        msg = getattr(getattr(ch0, "message", None), "content", None)
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()
+        # or ai_resp.choices[0].text
+        txt = getattr(ch0, "text", None)
+        if isinstance(txt, str) and txt.strip():
+            return txt.strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def _tidy_summary_html(h: str) -> str:
+    if not h:
+        return ""
+    # Ensure required headings exist; if the model used bold text, normalize to <h4>
+    def normalize_heading(text, canonical):
+        # replace occurrences like <b>Facts</b>, <strong>Facts</strong>, or plain "Facts:" at start
+        patterns = [
+            rf'(?is)<\s*b[^>]*>\s*{re.escape(canonical)}\s*<\/\s*b\s*>',
+            rf'(?is)<\s*strong[^>]*>\s*{re.escape(canonical)}\s*<\/\s*strong\s*>',
+            rf'(?im)^\s*{re.escape(canonical)}\s*:\s*'
+        ]
+        for p in patterns:
+            h_nonlocal = re.sub(p, f'<h4>{canonical}</h4>', text, count=1)
+            if h_nonlocal != text:
+                return h_nonlocal
+        return text
+
+    for head in ["Facts", "Issues", "Discussion (Arguments & Court's Observations)", "Decision"]:
+        h = normalize_heading(h, head)
+
+    # Convert accidental lists to paragraphs (no bullets rule)
+    h = re.sub(r'(?is)<\s*li[^>]*>\s*(.*?)\s*<\/\s*li\s*>', r'<p>\1</p>', h)
+    h = re.sub(r'(?is)<\s*\/?\s*(ul|ol)\s*[^>]*>', '', h)
+
+    # Remove script/style just in case
+    h = re.sub(r'(?is)<\s*(script|style)[^>]*>.*?<\/\s*\1\s*>', '', h)
+
+    # Basic sanity: wrap plain text in paragraphs if no tags at all
+    if '<' not in h and '>' not in h:
+        parts = [f'<p>{html.escape(p.strip())}</p>' for p in h.split('\n') if p.strip()]
+        h = ''.join(parts)
+
+    return h.strip()
+
+
+# ---------- Optional DB fetch (wire up only if you need it) ----------
+def _fetch_case_fulltext_from_db(case_id=None, case_number=None) -> str:
+    """
+    Replace the internals with your actual ORM/DB lookup.
+    The function should return the FULL case text (plain text) for the given ID/number.
+    This is intentionally a stub so we don't alter your existing DB code/objects.
+
+    Example (SQLAlchemy pseudo-code):
+        from your_models import AcerDetails
+        q = AcerDetails.query
+        if case_id:
+            rec = q.filter_by(id=case_id).first()
+        elif case_number:
+            rec = q.filter_by(case_law_number=case_number).first()
+        else:
+            rec = None
+        if rec:
+            # Prefer a dedicated plain-text field if you have one; else strip tags from HTML
+            text = (rec.full_case_text or _html_to_text(rec.full_case_html) or "").strip()
+            return text
+        return ""
+    """
+    return ""
 
 if __name__ == "__main__":
     app.run(debug=True)
