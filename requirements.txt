@@ -6,5 +6,5 @@ pandas
 beautifulsoup4
 openai
 python-dotenv
-openpypxl
+openpyxl==3.1.5
 
