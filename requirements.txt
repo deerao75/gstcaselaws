@@ -6,4 +6,5 @@ pandas
 beautifulsoup4
 openai
 python-dotenv
+openpypxl
 
