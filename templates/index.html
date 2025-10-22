@@ -457,23 +457,42 @@
   function filterSubject(q){
     q = (q||'').toLowerCase().trim();
     const groups = document.querySelectorAll('#subjectOptions .subject-group');
+
     groups.forEach(function(group){
-      const s2Els = group.querySelectorAll('[data-s2]');
-      let anyS2Visible = false;
+      const s1Value = (group.getAttribute('data-s1') || '').toLowerCase();
+      const s1El    = group.querySelector('[data-name="s1"]');     // the S1 row
+      const s2Els   = group.querySelectorAll('[data-s2]');         // all S2 rows
+
+      // Reset (show all) when query is empty
       if (q === '') {
+        if (s1El) s1El.style.display = '';
         s2Els.forEach(function(el){ el.style.display = ''; });
         group.style.display = '';
         return;
       }
+
+      // Match logic: show group if S1 matches OR any S2 matches
+      const s1Match = s1Value.indexOf(q) !== -1;
+      let anyS2Visible = false;
+
       s2Els.forEach(function(el){
         const s2 = (el.getAttribute('data-s2') || '');
-        const match = s2.indexOf(q) !== -1;
-        el.style.display = match ? '' : 'none';
-        if (match) anyS2Visible = true;
+        const s2Match = s2.indexOf(q) !== -1;
+
+        // If S1 matches, keep all S2 visible; else show only matched S2
+        const show = s1Match || s2Match;
+        el.style.display = show ? '' : 'none';
+        if (s2Match) anyS2Visible = true;
       });
-      group.style.display = anyS2Visible ? '' : 'none';
+
+      // Show S1 row if it matches or if any child S2 is visible
+      if (s1El) s1El.style.display = (s1Match || anyS2Visible) ? '' : 'none';
+
+      // Show/hide entire group based on any match
+      group.style.display = (s1Match || anyS2Visible) ? '' : 'none';
     });
   }
+
   function filterParty(q){
     q = (q||'').toLowerCase().trim();
     document.querySelectorAll('#partyOptions [data-party]').forEach(function(el){
