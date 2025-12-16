@@ -18,7 +18,7 @@ from email.header import Header
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64MB upload cap
-ALLOWED_UPLOADS = {".xlsx", ".xls", ".csv"}
+ALLOWED_UPLOADS = {".xlsx", ".xls", ".csv",".doc", ".docx" }
 
 # ======================= DB CONFIG =======================
 DB_USER = os.getenv("TIDB_USER") or os.getenv("MYSQL_USER", "root")
@@ -1033,6 +1033,9 @@ def logout():
 def admin_root():
     return redirect(url_for("admin_caselaws"))
 
+from flask import request, render_template
+from sqlalchemy import select, func, and_, or_, text
+
 @app.get("/admin/caselaws")
 def admin_caselaws():
     q = (request.args.get("q") or "").strip()
@@ -1072,12 +1075,14 @@ def admin_caselaws():
             .where(func.lower(Acer.c.type_of_court).contains('aaar'))
         ).scalar_one()
 
+        # FIX: High Court = case_law_number has 'HC' OR type_of_court has 'High Court' (space) or 'High-Court' (hyphen)
         high_court_case_laws = conn.execute(
             select(func.count())
             .select_from(Acer)
             .where(or_(
-                func.lower(Acer.c.type_of_court).contains('hc'),
-                func.lower(Acer.c.type_of_court).contains('high-court')
+                func.lower(Acer.c.case_law_number).contains('hc'),
+                func.lower(Acer.c.type_of_court).contains('high court'),
+                func.lower(Acer.c.type_of_court).contains('high-court'),
             ))
         ).scalar_one()
 
@@ -1102,7 +1107,6 @@ def admin_caselaws():
                 edit_item = None
         else:
             edit_item = None
-
 
     return render_template(
         "admin_caselaws.html",
@@ -1188,6 +1192,11 @@ EXPORT_COLUMN_ORDER = [
     'question_answered'
 ]
 
+from flask import request, send_file, url_for
+from sqlalchemy import select, func, and_, or_, text
+import pandas as pd
+import io
+
 @app.get("/admin/export_csv")
 def admin_export_csv():
     try:
@@ -1201,10 +1210,12 @@ def admin_export_csv():
             print("Error: Database engine 'ENGINE' is not defined.")
             return "Error: Database engine is missing.", 500
 
-        cols_to_select = [getattr(Acer.c, c) for c in EXPORT_COLUMN_ORDER if hasattr(Acer.c, c)]
-        selected_column_names = [c.name for c in cols_to_select]
+        # Always include 'id' for link construction
+        base_select_cols = [Acer.c.id]
+        export_cols = [c for c in EXPORT_COLUMN_ORDER if hasattr(Acer.c, c)]
+        cols_to_select = base_select_cols + [getattr(Acer.c, c) for c in export_cols if c != 'id']
 
-        if not cols_to_select:
+        if not export_cols:
             print("Warning: No valid columns found based on EXPORT_COLUMN_ORDER.")
             df = pd.DataFrame(columns=EXPORT_COLUMN_ORDER)
         else:
@@ -1212,24 +1223,41 @@ def admin_export_csv():
                 result = conn.execute(select(*cols_to_select).order_by(Acer.c.id.desc()))
                 rows = result.mappings().all()
 
-            df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=selected_column_names)
+            df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=['id'] + export_cols)
             print(f"Fetched {len(rows)} rows. Cleaning HTML for export...")
 
+            # Clean HTML for specified columns if present
             html_columns_to_clean = [
                 'summary_head_note',
                 'question_answered',
                 'basic_detail',
                 'citation'
             ]
-
             existing_html_columns = [col for col in html_columns_to_clean if col in df.columns]
             if existing_html_columns:
-                 for col_name in existing_html_columns:
-                     df[col_name] = df[col_name].fillna("").apply(lambda x: clean_html(x) if pd.notna(x) else "")
+                for col_name in existing_html_columns:
+                    df[col_name] = df[col_name].fillna("").apply(lambda x: clean_html(x) if pd.notna(x) else "")
 
+            # Build public case detail link using your route: public_case_detail
+            def build_public_link(record_id):
+                try:
+                    return url_for('public_case_detail', rid=int(record_id), _external=True)
+                except Exception:
+                    # Fallback path if url_for fails or route name differs
+                    base = request.url_root.rstrip('/')
+                    return f"{base}/case/{int(record_id)}"
+
+            if 'id' in df.columns:
+                df['public_case_link'] = df['id'].apply(build_public_link)
+            else:
+                df['public_case_link'] = ""
+
+            # Place columns in requested order and append the new link column
             final_column_order = [col for col in EXPORT_COLUMN_ORDER if col in df.columns]
-            if final_column_order:
-                df = df[final_column_order]
+            final_column_order_with_link = final_column_order + (['public_case_link'] if 'public_case_link' in df.columns else [])
+
+            if final_column_order_with_link:
+                df = df[final_column_order_with_link]
 
         buf = io.BytesIO()
         df.to_csv(buf, index=False, encoding="utf-8-sig")

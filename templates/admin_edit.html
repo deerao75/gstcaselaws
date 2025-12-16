@@ -148,6 +148,7 @@
       <div style="margin-top:14px;" class="form-group">
         <label>Full Case Law</label>
         <div class="rich-wrap">
+          <!-- This editor will be initialized taller (near full page height) -->
           <textarea id="e_full_case_law" name="full_case_law" class="form-input admin-rich">{{ r.full_case_law|safe }}</textarea>
         </div>
       </div>
@@ -168,22 +169,64 @@
 <script src="https://cdn.jsdelivr.net/npm/tinymce@6/tinymce.min.js" referrerpolicy="origin"></script>
 <script>
   document.addEventListener('DOMContentLoaded', function(){
+    // Compute dynamic heights so the editors use more vertical space
+    var baseHeight = Math.max(380, Math.floor(window.innerHeight * 0.45)); // for most editors
+    var fullHeight = Math.max(850, Math.floor(window.innerHeight * 0.82)); // for Full Case Law (near full page)
+
+    // Initialize all rich editors EXCEPT the Full Case Law one
     tinymce.init({
-      selector: 'textarea.admin-rich',
-      height: 320,
+      selector: 'textarea.admin-rich:not(#e_full_case_law)',
+      height: baseHeight,
       menubar: 'file edit view insert format tools table help',
       plugins: 'advlist autolink lists link image charmap preview anchor searchreplace visualblocks code fullscreen insertdatetime media table help wordcount paste codesample hr directionality nonbreaking',
       toolbar: [
         'undo redo | blocks fontfamily fontsize | bold italic underline strikethrough forecolor backcolor | alignleft aligncenter alignright alignjustify',
         '| bullist numlist outdent indent | table image link hr blockquote codesample | superscript subscript removeformat | searchreplace code fullscreen'
       ].join(' '),
-      paste_data_images: true,                 // allow paste images (base64) from Word/Docs
-      automatic_uploads: false,                // store images inline; no upload endpoint needed
+      paste_data_images: true,
+      automatic_uploads: false,
       convert_urls: false,
       entity_encoding: 'raw',
       paste_merge_formats: true,
       paste_retain_style_properties: 'all',
       content_style: 'body{font-family:Aptos,Segoe UI,system-ui,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111} table{border-collapse:collapse;width:100%} table,th,td{border:1px solid #ddd} th,td{padding:6px} img{max-width:100%;height:auto}'
+    });
+
+    // Initialize the Full Case Law editor with a much larger height (near full page)
+    tinymce.init({
+      selector: '#e_full_case_law',
+      height: fullHeight,
+      min_height: fullHeight,
+      menubar: 'file edit view insert format tools table help',
+      plugins: 'advlist autolink lists link image charmap preview anchor searchreplace visualblocks code fullscreen insertdatetime media table help wordcount paste codesample hr directionality nonbreaking',
+      toolbar: [
+        'undo redo | blocks fontfamily fontsize | bold italic underline strikethrough forecolor backcolor | alignleft aligncenter alignright alignjustify',
+        '| bullist numlist outdent indent | table image link hr blockquote codesample | superscript subscript removeformat | searchreplace code fullscreen'
+      ].join(' '),
+      paste_data_images: true,
+      automatic_uploads: false,
+      convert_urls: false,
+      entity_encoding: 'raw',
+      paste_merge_formats: true,
+      paste_retain_style_properties: 'all',
+      content_style: 'body{font-family:Aptos,Segoe UI,system-ui,Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111} table{border-collapse:collapse;width:100%} table,th,td{border:1px solid #ddd} th,td{padding:6px} img{max-width:100%;height:auto}',
+      setup: function(editor){
+        function resizeToViewport(){
+          try {
+            var h = Math.max(850, Math.floor(window.innerHeight * 0.82));
+            if (editor.theme && editor.theme.resizeTo) {
+              editor.theme.resizeTo(null, h);
+            } else {
+              var iframe = editor.iframeElement || (editor.getContentAreaContainer && editor.getContentAreaContainer().querySelector('iframe'));
+              if (iframe) iframe.style.height = h + 'px';
+              var host = editor.getContainer && editor.getContainer();
+              if (host) host.style.height = (h + 40) + 'px';
+            }
+          } catch(e){}
+        }
+        editor.on('init', resizeToViewport);
+        window.addEventListener('resize', resizeToViewport);
+      }
     });
   });
 
