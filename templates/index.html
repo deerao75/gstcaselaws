@@ -115,7 +115,26 @@
     .refine > * { width: 100%; margin-bottom: 8px; }
     .refine select { min-width: auto; }
   }
-  .btn{ cursor:pointer; }
+   .btn{
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+  }
+  /* Modal for empty search/selection */
+  .modal-overlay{
+    position:fixed; inset:0;
+    background:rgba(0,0,0,0.35);
+    display:none; align-items:center; justify-content:center;
+    z-index:1200;
+  }
+  .modal-box{
+    background:#fff; border-radius:14px; padding:20px 24px;
+    box-shadow:0 14px 36px rgba(0,0,0,0.14);
+    text-align:center; max-width:360px; width:90%;
+    border:1px solid #e5e5e5;
+  }
+  .modal-text{ font-size:15px; color:#111; margin-bottom:14px; }
 </style>
 {% endblock %}
 {% block content %}
@@ -127,6 +146,13 @@
 </div>
 <div class="loading-overlay" id="loading">
   <div class="spinner" aria-label="Searching…"></div>
+</div>
+<!-- Empty selection/search alert -->
+<div class="modal-overlay" id="emptyAlert">
+  <div class="modal-box">
+    <div class="modal-text">No selection or search made.</div>
+    <button class="btn btn-orange" type="button" id="emptyAlertOk">OK</button>
+  </div>
 </div>
 <!-- FILTERS -->
 <div class="filters-wrap">
@@ -378,6 +404,7 @@
                      s1=request.args.getlist('s1'),
                      s2=request.args.getlist('s2'),
                      q=(request.args.get('q') or request.args.get('ai_q') or ai_q),
+                     ai_q=(request.args.get('ai_q') or ai_q),
                      ai_search=request.args.get('ai_search') or 'true',
                      result_ids=results|map(attribute='id')|join(','),
                      page=page) }}">
@@ -500,16 +527,58 @@
       el.style.display = val.indexOf(q) !== -1 ? '' : 'none';
     });
   }
-  // Loading overlay
+  // Loading overlay + empty-submit guard
   const filterForm = document.getElementById('filtersForm');
   const aiForm = document.getElementById('aiSearchForm');
   const loading = document.getElementById('loading');
   const filterSearchBtn = document.getElementById('filterSearchBtn');
   const aiSearchBtn = document.getElementById('aiSearchBtn');
+  const emptyAlert = document.getElementById('emptyAlert');
+  const emptyAlertOk = document.getElementById('emptyAlertOk');
+
+  function enableButtons(){
+    if (filterSearchBtn) filterSearchBtn.disabled = false;
+    if (aiSearchBtn) aiSearchBtn.disabled = false;
+  }
+  function hideLoading(){
+    if (loading) loading.style.display = 'none';
+  }
+  function showEmptyAlert(){
+    hideLoading();
+    enableButtons();
+    if (emptyAlert) emptyAlert.style.display = 'flex';
+  }
+  if (emptyAlertOk){
+    emptyAlertOk.addEventListener('click', function(){
+      if (emptyAlert) emptyAlert.style.display = 'none';
+      hideLoading();
+      enableButtons();
+    });
+  }
+
   if (filterForm) {
-    filterForm.addEventListener('submit', function(){
+    filterForm.addEventListener('submit', function(e){
+      const hasSelection = filterForm.querySelectorAll('input[type="checkbox"]:checked').length > 0;
+      const hasText = !!(filterForm.querySelector('textarea[name="q"]')?.value || '').trim();
+      if (!hasSelection && !hasText){
+        e.preventDefault();
+        showEmptyAlert();
+        return;
+      }
       if (loading) loading.style.display = 'flex';
       if (filterSearchBtn) filterSearchBtn.disabled = true;
+    });
+  }
+  if (aiForm) {
+     aiForm.addEventListener('submit', function(e){
+      const aiText = (aiForm.querySelector('textarea[name="ai_q"]')?.value || '').trim();
+      if (!aiText){
+        e.preventDefault();
+        showEmptyAlert();
+        return;
+      }
+      if (loading) loading.style.display = 'flex';
+      if (aiSearchBtn) aiSearchBtn.disabled = true;
     });
   }
   if (aiForm) {

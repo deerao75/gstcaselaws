@@ -56,7 +56,12 @@
   .print-first-header { display:none; }
 
   @media print {
-    @page { margin: 20mm 16mm 30mm 12mm; }
+    @page {
+      margin: 20mm 16mm 30mm 12mm;
+      @top-left { content: none; }
+      @top-center { content: none; }
+      @top-right { content: none; }
+    }
     header.topbar { visibility: hidden; }
     header.topbar img {
       visibility: visible;
@@ -90,7 +95,19 @@
     #section-fullcase > h3.section { display: none; }
     .fullcase.prose, #fullCase{ max-height:none !important; overflow:visible !important; }
     .prose table, .box table { break-inside: avoid; page-break-inside: avoid; }
-    .prose tr, .prose td, .prose th, .box tr, .box td, .box th { break-inside: avoid; page-break-inside: avoid; }
+    .prose tr, . prose td, .prose th, . box tr, .box td, . box th { break-inside: avoid; page-break-inside: avoid; }
+    .prose h1, .prose h2, . prose h3, .prose h4, .prose h5, .prose h6,
+    .fullcase h1, .fullcase h2, .fullcase h3, .fullcase h4, .fullcase h5, .fullcase h6,
+    h3. section {
+      break-after: avoid;
+      page-break-after: avoid;
+      orphans: 3;
+      widows: 3;
+    }
+    .prose p, .prose li, .prose div, .fullcase p, .fullcase li, .fullcase div {
+      orphans: 3;
+      widows: 3;
+    }
     body::before{
       content:"{{ r.case_law_number }}";
       position:fixed; top:55%; left:50%;
@@ -115,6 +132,27 @@
   /* highlight in detail view */
   .hl{ background:var(--orange-faint); border-radius:3px; padding:0 2px; }
 
+  /* Print choice modal */
+  .print-modal-overlay{
+    position:fixed; inset:0; z-index:1400;
+    background:rgba(0,0,0,0.35);
+    display:none; align-items:center; justify-content:center;
+  }
+  .print-modal{
+    background:#fff; border-radius:14px; padding:18px 20px;
+    box-shadow:0 14px 36px rgba(0,0,0,0.16);
+    max-width:380px; width:92%;
+    border:1px solid #e5e5e5; text-align:left;
+  }
+
+    @media print {
+    .print-modal-overlay{ display:none !important; }
+    body.print-headnotes-only #section-headnotes ~ * { display:none !important; }
+  }
+  .print-modal h4{ margin:0 0 10px 0; font-size:16px; font-weight:700; color:#111; }
+  .print-modal .choice{ display:flex; gap:8px; align-items:center; margin:8px 0; }
+  .print-modal .actions{ margin-top:14px; display:flex; gap:10px; justify-content:flex-end; }
+
   /* AI Summary box tweaks */
   #aiSummaryBox { display:none; }
   /* Use normal flow (not pre-wrap) and tighten margins just for the AI box */
@@ -130,7 +168,7 @@
     <!-- Left Panel -->
     <aside class="side-panel" {% if search_summary or list_results or all_results or results %}style="display:block"{% endif %}>
       {# --- BUILD SEARCH CRITERIA IF search_summary IS MISSING (AI path) --- #}
-      {% set _q = request.args.get('q') %}
+      {% set _q = request.args.get('q') or request.args.get('ai_q') %}
       {% set _industries = request.args.getlist('industry') %}
       {% set _sections   = request.args.getlist('section') %}
       {% set _rules      = request.args.getlist('rule') %}
@@ -170,9 +208,9 @@
                                                      party=request.args.getlist('party'),
                                                      s1=request.args.getlist('s1'),
                                                      s2=request.args.getlist('s2'),
-                                                     q=request.args.get('q'),
+                                                     q=request.args.get('q') or request.args.get('ai_q'),
                                                      ai_search=request.args.get('ai_search'),
-                                                      ai_q=request.args.get('ai_q'),
+                                                     ai_q=request.args.get('ai_q') or request.args.get('q'),
                                                      page=request.args.get('page')) }}">
                 Case No.: {{ it.case_law_number }}
               </a>
@@ -355,14 +393,34 @@
           })();
           </script>
 
-          <button class="print-btn" title="Print" onclick="window.print()">
-            <svg class="print-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M6 9V3h12v6M6 14H5a 2 2 0 0 1-2-2v-1a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1" stroke="#000" stroke-width="1.5"/>
-              <path d="M7 14h10v7H7z" stroke="#000" stroke-width="1.5"/>
-            </svg>
-            Print
+          <button class="print-btn" id="printBtn" title="Print"
+              onclick="document.getElementById('printChoiceModal').style.display='flex'; return false;">
+              <svg class="print-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 9V3h12v6M6 14H5a 2 2 0 0 1-2-2v-1a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1" stroke="#000" stroke-width="1.5"/>
+                  <path d="M7 14h10v7H7z" stroke="#000" stroke-width="1.5"/>
+              </svg>
+              Print
           </button>
         </div>
+
+        <div id="printChoiceModal" class="print-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="printChoiceTitle">
+            <div class="print-modal">
+              <h4 id="printChoiceTitle">Print options</h4>
+              <p style="font-size: 11px; color:#666; margin: 0 0 8px 0;">Tip:  Uncheck "Headers and footers" in your browser's print dialog to remove the date/URL from printouts.</p>
+              <label class="choice">
+                <input type="radio" name="printChoice" id="printChoiceHead" value="head" checked>
+                <span>Head Notes only</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="printChoice" id="printChoiceFull" value="full">
+                <span>Full Case Law</span>
+              </label>
+                <div class="actions">
+                  <button type="button" class="print-btn" id="printCancelBtn" onclick="document.getElementById('printChoiceModal').style.display='none'; return false;">Cancel</button>
+                  <button type="button" class="print-btn" id="printOkBtn" onclick="(function(){ var h=document.getElementById('printChoiceHead'); document.body.classList.toggle('print-headnotes-only', h && h.checked); document.getElementById('printChoiceModal').style.display='none'; setTimeout(function(){window.print();},30); })(); return false;">OK</button>
+                </div>
+            </div>
+          </div>
 
         <!-- Hero -->
         <div class="hero-case">
@@ -555,7 +613,7 @@
       // Accept a few common payload shapes
       var txt = '';
       if (data && data.error){
-        txt = 'Error: ' + (data.error || 'Unable to generate summary.';
+        txt = 'Error: ' + (data.error || 'Unable to generate summary.');
       } else if (data && (data.summary_html || data.html)){
         txt = data.summary_html || data.html;
         // trust server HTML minimally (if provided)
@@ -644,7 +702,6 @@
       return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]);
     });
   }
-
   // Expose to inline handlers (guards prevent double-define)
   if (typeof window.generateAISummary !== 'function') window.generateAISummary = generateAISummary;
   if (typeof window.printAISummary    !== 'function') window.printAISummary    = printAISummary;
@@ -657,6 +714,77 @@
       b.addEventListener('click', window.generateAISummary);
       b.dataset._aiBound = '1';
     }
+  });
+
+  // === Print choice modal (global) ===
+  function openPrintChooser(){
+    const m = document.getElementById('printChoiceModal');
+    if (m) m.style.display = 'flex';
+    const head = document.getElementById('printChoiceHead');
+    if (head) head.checked = true; // default
+    document.body.classList.remove('print-headnotes-only');
+  }
+  function closePrintChooser(){
+    const m = document.getElementById('printChoiceModal');
+    if (m) m.style.display = 'none';
+  }
+  function confirmPrintChoice(){
+    const head = document.getElementById('printChoiceHead');
+    const isHeadOnly = head && head.checked;
+    document.body.classList.toggle('print-headnotes-only', !!isHeadOnly);
+    closePrintChooser();
+    setTimeout(() => window.print(), 30);
+  }
+  window.openPrintChooser = openPrintChooser;
+  window.closePrintChooser = closePrintChooser;
+  window.confirmPrintChoice = confirmPrintChoice;
+
+  // Bind the print button and modal buttons explicitly
+  (function(){
+      function bindPrintButtons(){
+          var pb = document.getElementById('printBtn');
+          if (pb && !pb.dataset._printBound) {
+              pb.removeAttribute('onclick');
+              pb.addEventListener('click', function(e){
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openPrintChooser();
+              });
+              pb.dataset._printBound = '1';
+          }
+
+          var cancelBtn = document.getElementById('printCancelBtn');
+          if (cancelBtn && !cancelBtn.dataset._printBound) {
+              cancelBtn.addEventListener('click', function(e){
+                  e.preventDefault();
+                  e.stopPropagation();
+                  closePrintChooser();
+              });
+              cancelBtn.dataset._printBound = '1';
+          }
+
+          var okBtn = document.getElementById('printOkBtn');
+          if (okBtn && !okBtn.dataset._printBound) {
+              okBtn.addEventListener('click', function(e){
+                  e.preventDefault();
+                  e.stopPropagation();
+                  confirmPrintChoice();
+              });
+              okBtn. dataset._printBound = '1';
+          }
+      }
+
+      // Run immediately if DOM already loaded, otherwise wait
+      if (document. readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', bindPrintButtons);
+      } else {
+          bindPrintButtons();
+      }
+  })();
+
+  // close modal on Escape
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closePrintChooser();
   });
 </script>
 {% endblock %}

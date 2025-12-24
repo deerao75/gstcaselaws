@@ -816,6 +816,8 @@ def public_case_detail(rid: int):
 
     is_ai_search    = (args.get("ai_search") == "true")
     ai_q            = (args.get("ai_q") or "").strip() if is_ai_search else ""
+    if is_ai_search and not ai_q and q:
+        ai_q = q  # carry over AI query passed as q
 
     # paging must mirror home(): 25 for AI tab, else 10
     per_page        = 25 if is_ai_search and ai_q else 10
