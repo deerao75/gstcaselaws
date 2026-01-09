@@ -17,7 +17,7 @@ from email.header import Header
 # ======================= FLASK & UPLOAD CONFIG =======================
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64MB upload cap
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB upload cap
 ALLOWED_UPLOADS = {".xlsx", ".xls", ".csv",".doc", ".docx" }
 
 # ======================= DB CONFIG =======================
