@@ -433,7 +433,7 @@
                 {{ _d[8:10] ~ '-' ~ _d[5:7] ~ '-' ~ _d[0:4] }}
               {% else %}{{ r.date }}{% endif %}
             </span>
-            {% if r.type_of_court %}<span class="pill"><span class="dot"></span>{{ r.type_of_court }}</span>{% endif %}
+            {% if court_type_display %}<span class="pill"><span class="dot"></span>{{ court_type_display }}</span>{% endif %}
             {% if r.state %}<span class="pill"><span class="dot"></span>{{ r.state }}</span>{% endif %}
             {% if r.subject_matter1 %}<span class="pill"><span class="dot"></span>{{ r.subject_matter1 }}</span>{% endif %}
             {% if r.subject_matter2 %}<span class="pill"><span class="dot"></span>{{ r.subject_matter2 }}</span>{% endif %}
