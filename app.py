@@ -849,9 +849,17 @@ def public_case_detail(rid: int):
         where_phrase  = and_(*(clauses + [clause_phrase])) if clauses else clause_phrase
 
         # try phrase slice first
+        # try phrase slice first
         with ENGINE.connect() as conn:
+            cols = [
+                Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date,
+                Acer.c.summary_head_note,
+                Acer.c.type_of_court, Acer.c.state, Acer.c.year,
+                Acer.c.section, Acer.c.rule, Acer.c.citation,
+                Acer.c.subject_matter1, Acer.c.subject_matter2,
+            ]
             rows_phrase = conn.execute(
-                select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
+                select(*cols)
                 .where(where_phrase).order_by(Acer.c.id.desc())
                 .limit(per_page).offset(offset)
             ).mappings().all()
@@ -867,7 +875,7 @@ def public_case_detail(rid: int):
             where_tokens  = and_(*(clauses + [clause_tokens])) if clauses else clause_tokens
             with ENGINE.connect() as conn:
                 rows_tokens = conn.execute(
-                    select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
+                    select(*cols)
                     .where(where_tokens).order_by(Acer.c.id.desc())
                     .limit(per_page).offset(offset)
                 ).mappings().all()
@@ -878,13 +886,20 @@ def public_case_detail(rid: int):
             clauses.append(_nlq_clause(q))
         where_expr = and_(*clauses) if clauses else text("1=1")
         with ENGINE.connect() as conn:
+            cols = [
+                Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date,
+                Acer.c.summary_head_note,
+                Acer.c.type_of_court, Acer.c.state, Acer.c.year,
+                Acer.c.section, Acer.c.rule, Acer.c.citation,
+                Acer.c.subject_matter1, Acer.c.subject_matter2,
+            ]
             rows = conn.execute(
-                select(Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.date)
+                select(*cols)
                 .where(where_expr).order_by(Acer.c.id.desc())
                 .limit(per_page).offset(offset)
             ).mappings().all()
         list_results = [dict(x) for x in rows]
-
+        
     # 4) Build the same Search Criteria line, now also showing AI query (if any)
     search_bits = []
     if sel_industries: search_bits.append("Industry: " + ", ".join(sel_industries))
