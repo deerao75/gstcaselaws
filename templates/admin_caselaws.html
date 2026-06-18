@@ -96,20 +96,15 @@ table th{ font-weight:500; background:#fafafa; }
 }
 </style>
 <section class="admin-wrap">
-  <!-- LEFT MENU -->
   <aside class="side">
     <h3>Manage Case Laws</h3>
-    <!-- Removed Add New button as requested -->
     <a class="nav-link {% if mode=='edit' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=edit">✏️ Edit</a>
     <a class="nav-link {% if mode=='delete' %}active{% endif %}" href="{{ url_for('admin_caselaws') }}?mode=delete">🗑️ Delete</a>
     <a class="nav-link" id="bulkDownloadLink" href="{{ url_for('admin_export_csv') }}">⬇️ Bulk Download</a>
     <a class="nav-link" id="bulkUploadLink" href="javascript:void(0)" onclick="document.getElementById('panel-bulkupload').classList.add('show'); document.querySelectorAll('.panel').forEach(p => p !== document.getElementById('panel-bulkupload') && p.classList.remove('show'));">⬆️ Bulk Upload</a>
     <a class="nav-link" href="{{ url_for('logout') }}">🚪 Logout</a>
   </aside>
-  <!-- RIGHT CONTENT -->
   <div class="main">
-    <!-- ADD NEW PANEL REMOVED -->
-    <!-- EDIT -->
     {% if edit_item %}
     <div id="panel-edit" class="panel show"><div class="card">
       <h2 style="margin:0 0 8px 0;">Edit Case Law #{{ edit_item.id }}</h2>
@@ -203,7 +198,6 @@ table th{ font-weight:500; background:#fafafa; }
       </div>
     </div></div>
     {% endif %}
-    <!-- BULK UPLOAD (File Input) -->
     <div id="panel-bulkupload" class="panel">
       <div class="card">
         <h2 style="margin:0 0 8px 0;">Bulk Upload — Excel/CSV File</h2>
@@ -222,7 +216,6 @@ table th{ font-weight:500; background:#fafafa; }
         </div>
       </div>
     </div>
-    <!-- SEARCH -->
     <div id="panel-search" class="panel {% if not edit_item and mode!='delete' %}show{% endif %}">
       <div class="card">
         <h2 style="margin:0 0 8px 0;">Search Case Laws</h2>
@@ -238,7 +231,6 @@ table th{ font-weight:500; background:#fafafa; }
           </div>
         </form>
 
-        <!-- Statistics Table -->
         <table class="stats-table">
           <thead>
             <tr>
@@ -266,6 +258,10 @@ table th{ font-weight:500; background:#fafafa; }
             <tr>
               <td>Supreme Court Case Laws</td>
               <td class="count-cell">{{ supreme_court_case_laws }}</td>
+            </tr>
+            <tr>
+              <td>GSTAT Case Laws</td>
+              <td class="count-cell">{{ gstat_case_laws }}</td>
             </tr>
           </tbody>
         </table>
@@ -320,7 +316,6 @@ table th{ font-weight:500; background:#fafafa; }
         {% endif %}
       </div>
     </div>
-    <!-- DELETE -->
     <div id="panel-delete" class="panel {% if mode=='delete' and not edit_item %}show{% endif %}">
       <div class="card">
         <h2 style="margin:0 0 8px 0;">Delete Case Laws</h2>
