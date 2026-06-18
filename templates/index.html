@@ -303,7 +303,9 @@
         {% set _case_up = (_case|string).upper().strip() %}
         {% set _seg = (_case_up.rsplit('-', 1)[-1] if '-' in _case_up else _case_up) | trim %}
         {% set _prefix = _seg|replace(' ','')|replace('(','')|replace(')','') %}
-        {% if _prefix.startswith('AAAR') %}
+        {% if _prefix.startswith('GSTAT') %}
+          {% set _court = 'GSTAT' %}{% set _code = _prefix[5:] %}
+        {% elif _prefix.startswith('AAAR') %}
           {% set _court = 'AAAR' %}{% set _code = _prefix[4:] %}
         {% elif _prefix.startswith('AAR') %}
           {% set _court = 'AAR' %}{% set _code = _prefix[3:] %}
@@ -357,7 +359,9 @@
         {% endif %}
       {% endif %}
       {% set _c_up = (_court|string).upper() %}
-      {% if _c_up in ['SC','SUPREME COURT','SUPREME COURT OF INDIA'] %}
+      {% if _c_up in ['GSTAT'] %}
+        {% set _court = 'GSTAT' %}
+      {% elif _c_up in ['SC','SUPREME COURT','SUPREME COURT OF INDIA'] %}
         {% set _court = 'Supreme Court' %}
       {% elif _c_up in ['HC','HIGH COURT'] %}
         {% set _court = 'High Court' %}
