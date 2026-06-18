@@ -793,8 +793,18 @@ def home():
 @app.get("/case/<int:rid>")
 def public_case_detail(rid: int):
     # 1) Fetch the hero case row
+   
     with ENGINE.connect() as conn:
-        row = conn.execute(select(Acer).where(Acer.c.id == rid)).mappings().first()
+        stmt = select(
+            Acer.c.id, Acer.c.case_law_number, Acer.c.name_of_party, Acer.c.state, 
+            Acer.c.year, Acer.c.type_of_court, Acer.c.industry_sector, 
+            Acer.c.subject_matter1, Acer.c.subject_matter2, Acer.c.section, 
+            Acer.c.rule, Acer.c.case_name, Acer.c.date, Acer.c.basic_detail, 
+            Acer.c.summary_head_note, Acer.c.citation, Acer.c.question_answered, 
+            Acer.c.full_case_law
+        ).where(Acer.c.id == rid)
+        row = conn.execute(stmt).mappings().first()
+        
     if not row:
         abort(404)
     r = dict(row)
