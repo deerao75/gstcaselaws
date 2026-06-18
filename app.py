@@ -1101,6 +1101,13 @@ def admin_caselaws():
             ))
         ).scalar_one()
 
+        # === ADDED FOR GSTAT COUNT ===
+        gstat_case_laws = conn.execute(
+            select(func.count())
+            .select_from(Acer)
+            .where(func.lower(Acer.c.type_of_court).contains('gstat'))
+        ).scalar_one()
+
         rid = request.args.get('rid')
         if rid:
             try:
@@ -1128,7 +1135,8 @@ def admin_caselaws():
         aar_case_laws=aar_case_laws,
         aaar_case_laws=aaar_case_laws,
         high_court_case_laws=high_court_case_laws,
-        supreme_court_case_laws=supreme_court_case_laws
+        supreme_court_case_laws=supreme_court_case_laws,
+        gstat_case_laws=gstat_case_laws  # === ADDED VARIABLE FOR THE HTML ===
     )
 
 @app.route("/admin/caselaws/<int:rid>/edit", methods=["GET", "POST"])
